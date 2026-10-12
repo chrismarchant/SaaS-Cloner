@@ -2,6 +2,44 @@
 
 Updated at each gate checkpoint. Newest first.
 
+## Checkpoint: G01 in progress, G03 recovery core done — 2026-10-12 23:50 UTC
+
+- **Branch / SHA**: `claude/zen-lamport-ijxd7w` at `4359ce2b6` (pushed). Upstream baseline unchanged: `git diff --stat upstream-baseline...HEAD -- . ':(exclude)rea-web'` is empty.
+- **Gate status**: G00 complete. G01 not yet complete: every component of the control plane exists except the API server, which is being finished; the gate closes when a runner round-trips a job through the real API (not the test fake control plane).
+
+### Completed since G00
+
+| Item                                                                                                                                                                                                              | Owner  | Evidence (command → result, run 2026-10-12)                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| `@rea-web/contracts`: route contracts for every application and runner-protocol route (`API_ROUTES`), OpenAPI builder                                                                                             | Fable  | `npx vitest run --project contracts` → 116/116                                                              |
+| `@rea-web/db` (WP02): migrations runner, repositories, project-scoped `SKIP LOCKED` claims, fenced heartbeat/transition/complete, lease reaper, `job_events` NOTIFY                                               | Sonnet | `--project db` → 40/40 against local PostgreSQL 16                                                          |
+| `@rea-web/storage` (WP02): filesystem and S3 `ObjectStore` with size caps and streamed SHA-256                                                                                                                    | Sonnet | `--project storage` → 103/103 (S3 against an in-process mock; no real S3 service)                           |
+| `@rea-web/rea-adapter` (WP05): owned stdio process groups, allowlisted environment, live discovery, Ajv 2020 argument validation, raw + derived results with confidence/authority, evidence ownership per session | Fable  | `--project rea-adapter` → 6/6 against the **real built upstream** MCP server                                |
+| `@rea-web/model-connector` (WP07): Anthropic SDK streaming provider with server-side fallbacks; scripted and disabled providers; bounded follow-up loop with redaction, budgets, approvals                        | Fable  | `--project model-connector` → 7/7 (scripted provider only; **no live model call made**: no approved budget) |
+| `apps/runner` (WP06): outbound-only claim loop, lease keeper, measured/counted budgets, effect ledger, `investigation.run` and `investigation.follow_up` executors                                                | Fable  | `--project runner` → 11/11 against the real upstream server and a test fake control plane                   |
+| `@rea-web/recovery` (WP11): package builder, RECOVERY.md generation, integrity verification, tar pack/unpack with admission limits, Ed25519 signing, chunked AES-256-GCM                                          | Sonnet | `--project recovery` → 62/62                                                                                |
+| Deployment definition: Railway IaC (`.railway/railway.ts`, `railway@3.12.0`), API and runner Dockerfiles, local compose stack                                                                                     | Fable  | `npm run deploy:validate` → valid for production and staging (local checks only)                            |
+
+### Active assignments
+
+| WP                                                             | Owner  | Status                                                                                                                                        |
+| -------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| WP03/04 API server                                             | Sonnet | Continuing a partial implementation (89 tests written, 88 passing at hand-over). Adding `/api/v1/health`, SSE tests and a secret-logging test |
+| WP10 preservation collectors                                   | Sonnet | Started (restart after a rate limit)                                                                                                          |
+| WP12 verifier/restorer + recover-cli                           | —      | Not started; depends on WP10 fixture                                                                                                          |
+| WP09 frontend                                                  | —      | Not started; depends on WP03/04                                                                                                               |
+| Runner executors for preservation/recovery/compare/export jobs | Fable  | Not started; the runner currently refuses these kinds with `capability_unavailable`                                                           |
+
+### Not verified
+
+- Live model provider, real S3, Railway (`railway config plan`), container image builds and the compose stack: no credentials, no Docker daemon. Image base tags are not digest-pinned (Docker Hub returned 429).
+- Any provider-backed upstream tool (Ghidra, Hopper, IDA, JADX, …): none installed on this host. See `PARITY-MATRIX.md`.
+
+### Blockers and limitations
+
+- Sub-agents for WP03/04 and WP10 were terminated by a session rate limit (429) and restarted at 23:45 UTC.
+- The tag `upstream-baseline-c22111e` could not be pushed (HTTP 403 from the git proxy for tag refs). The baseline is published as branch `upstream-baseline`; the tag exists only locally.
+
 ## Checkpoint: G00 complete, G01 contracts started — 2026-10-12
 
 - **Branch / SHA**: `claude/zen-lamport-ijxd7w` (see `git log -1` for the checkpoint SHA); upstream baseline `c22111eca2c4bc84a084f12711f405b3e7422a40` (tag `upstream-baseline-c22111e`, branch `upstream-baseline`).
@@ -9,27 +47,27 @@ Updated at each gate checkpoint. Newest first.
 
 ### Completed
 
-| Item                                                   | Evidence                                                                 |
-| ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| Upstream fetched with full history and tags; pinned    | `docs/UPSTREAM-PROVENANCE.md`                                            |
-| Unchanged baseline: install, typecheck, lint, build, artifacts, full deterministic suite | `docs/verification/G00-baseline.md` (9,229 passed / 2 failed / 123 skipped; one failure is Node-22-only, one reproduces on Node 24) |
-| Live runtime discovery (173 tools, 6 prompts, availability groups, digests) | `tools/parity-matrix/probes/linux-x64-node22-no-providers.json.gz`        |
-| Parity matrix v0 generated from catalog + live runtime | `docs/PARITY-MATRIX.md` (counts computed, consistency checks pass)        |
-| Upstream env/provider/CI inventories (Haiku, cited)    | `docs/inventory/upstream-env-and-providers.md`, `docs/inventory/upstream-ci-lanes-and-checks.md` |
-| Code-to-PRD resolved to its pinned MIT source; vendored | `third_party/code-to-prd/`, provenance table                              |
-| Architecture documents                                  | `SS00.md`, `ARCHITECTURE.md`, `API.md`, `RECOVERY-FORMAT.md`, `THREAT-MODEL.md`, `IMPLEMENTATION-PLAN.md` |
-| Workspace scaffold (`rea-web/`, own lockfile) conforming to upstream oxfmt/oxlint with **no upstream file changes** | root `npm run check:fast` and `npm run format:check` pass with the extension present |
-| `@rea-web/contracts` (G01/WP01): errors, job FSM + budgets, runner protocol + capability digest, SSRF guard, safe paths + archive admission, redaction, API resource schemas, OpenAPI builder, recovery manifest v1, routing table + classifier | 116 tests passing (`npx vitest run --project contracts`) |
-| Initial PostgreSQL schema                                | `packages/db/migrations/0001_initial.sql` (not yet applied by code)        |
+| Item                                                                                                                                                                                                                                            | Evidence                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Upstream fetched with full history and tags; pinned                                                                                                                                                                                             | `docs/UPSTREAM-PROVENANCE.md`                                                                                                       |
+| Unchanged baseline: install, typecheck, lint, build, artifacts, full deterministic suite                                                                                                                                                        | `docs/verification/G00-baseline.md` (9,229 passed / 2 failed / 123 skipped; one failure is Node-22-only, one reproduces on Node 24) |
+| Live runtime discovery (173 tools, 6 prompts, availability groups, digests)                                                                                                                                                                     | `tools/parity-matrix/probes/linux-x64-node22-no-providers.json.gz`                                                                  |
+| Parity matrix v0 generated from catalog + live runtime                                                                                                                                                                                          | `docs/PARITY-MATRIX.md` (counts computed, consistency checks pass)                                                                  |
+| Upstream env/provider/CI inventories (Haiku, cited)                                                                                                                                                                                             | `docs/inventory/upstream-env-and-providers.md`, `docs/inventory/upstream-ci-lanes-and-checks.md`                                    |
+| Code-to-PRD resolved to its pinned MIT source; vendored                                                                                                                                                                                         | `third_party/code-to-prd/`, provenance table                                                                                        |
+| Architecture documents                                                                                                                                                                                                                          | `SS00.md`, `ARCHITECTURE.md`, `API.md`, `RECOVERY-FORMAT.md`, `THREAT-MODEL.md`, `IMPLEMENTATION-PLAN.md`                           |
+| Workspace scaffold (`rea-web/`, own lockfile) conforming to upstream oxfmt/oxlint with **no upstream file changes**                                                                                                                             | root `npm run check:fast` and `npm run format:check` pass with the extension present                                                |
+| `@rea-web/contracts` (G01/WP01): errors, job FSM + budgets, runner protocol + capability digest, SSRF guard, safe paths + archive admission, redaction, API resource schemas, OpenAPI builder, recovery manifest v1, routing table + classifier | 116 tests passing (`npx vitest run --project contracts`)                                                                            |
+| Initial PostgreSQL schema                                                                                                                                                                                                                       | `packages/db/migrations/0001_initial.sql` (not yet applied by code)                                                                 |
 
 ### Active assignments and ownership
 
-| WP   | Owner  | Status                                                                                  |
-| ---- | ------ | --------------------------------------------------------------------------------------- |
-| WP01 | Fable  | contracts done; `db`/`storage`/`rea-adapter`/`model-connector`/`recovery`/`preservation`/apps are placeholders |
-| WP02 | Sonnet | not started (db repositories + storage backends)                                         |
-| WP03/04 | Sonnet | not started (api core, orchestrator)                                                  |
-| WP05 | Fable  | not started (rea-adapter)                                                               |
+| WP      | Owner  | Status                                                                                                         |
+| ------- | ------ | -------------------------------------------------------------------------------------------------------------- |
+| WP01    | Fable  | contracts done; `db`/`storage`/`rea-adapter`/`model-connector`/`recovery`/`preservation`/apps are placeholders |
+| WP02    | Sonnet | not started (db repositories + storage backends)                                                               |
+| WP03/04 | Sonnet | not started (api core, orchestrator)                                                                           |
+| WP05    | Fable  | not started (rea-adapter)                                                                                      |
 
 ### Verification results summary
 
