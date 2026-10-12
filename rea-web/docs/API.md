@@ -1,0 +1,153 @@
+# Application API
+
+Served by `apps/api`. The OpenAPI 3.1 document is generated from the zod
+contracts in `packages/contracts/src/api/` and served at `GET /openapi.json`;
+this page is the human-readable summary and the authoritative list of
+behavioural rules. Paths below are relative to `/api/v1`.
+
+## Conventions
+
+- Authentication: cookie session (`rea_web_session`, httpOnly, SameSite=Lax)
+  or `Authorization: Bearer <api token>`. Runner endpoints accept only
+  `Authorization: Bearer <runner token>`.
+- Authorization: every project-scoped route requires membership with at least
+  the role in the table (`viewer < member < admin < owner`).
+- Idempotency: mutation endpoints accept `Idempotency-Key` (1–128 chars). The
+  key is scoped to the authenticated principal and project. Same key + same body
+  hash → stored response; same key + different body → `422 idempotency_conflict`.
+- Errors: `{ "error": { "code", "message", "details"?, "request_id" } }`.
+  Codes are a closed set defined in `contracts/src/api/errors.ts` (e.g.
+  `unauthorized`, `forbidden`, `not_found`, `validation_failed`,
+  `idempotency_conflict`, `stale_lease`, `invalid_transition`,
+  `budget_exceeded`, `capability_unavailable`, `payload_too_large`,
+  `unsafe_url`, `unsafe_archive`).
+- IDs are UUIDv7 strings. Timestamps are RFC 3339 UTC.
+- Pagination: `?cursor=&limit=` with `next_cursor` in responses.
+- Streams: SSE with `id:` = event `seq`; `Last-Event-ID` resumes.
+
+## Auth and accounts
+
+| Method | Path                | Role | Notes                                                                                           |
+| ------ | ------------------- | ---- | ----------------------------------------------------------------------------------------------- |
+| POST   | `/auth/register`    | —    | Disabled when `REA_WEB_ALLOW_REGISTRATION=false`; first user becomes owner of a default project |
+| POST   | `/auth/login`       | —    | Sets session cookie                                                                             |
+| POST   | `/auth/logout`      | user | Clears session                                                                                  |
+| GET    | `/auth/me`          | user | Current principal and memberships                                                               |
+| POST   | `/auth/tokens`      | user | Create API token (returned once)                                                                |
+| DELETE | `/auth/tokens/{id}` | user | Revoke                                                                                          |
+
+## Projects and runners
+
+| Method | Path                                     | Role   | Notes                                                              |
+| ------ | ---------------------------------------- | ------ | ------------------------------------------------------------------ |
+| GET    | `/projects`                              | user   | Projects the principal belongs to                                  |
+| POST   | `/projects`                              | user   | Creates project; creator is owner                                  |
+| GET    | `/projects/{p}`                          | viewer |                                                                    |
+| POST   | `/projects/{p}/members`                  | admin  | Add/change role                                                    |
+| POST   | `/projects/{p}/runners`                  | admin  | Create runner record + token (returned once)                       |
+| GET    | `/projects/{p}/runners`                  | viewer | Includes last capability report summary                            |
+| GET    | `/projects/{p}/runners/{r}/capabilities` | viewer | Full verbatim report: tools, availability groups, candidates, host |
+| DELETE | `/projects/{p}/runners/{r}`              | admin  | Revoke token; in-flight leases are interrupted                     |
+
+## Targets
+
+| Method | Path                                     | Role   | Notes                                                                                                                                   |
+| ------ | ---------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/projects/{p}/targets/uploads`          | member | `multipart/form-data` or raw body with `X-Target-Name`; streamed to storage; sha256, size, sniffed kind; cap `REA_WEB_MAX_UPLOAD_BYTES` |
+| POST   | `/projects/{p}/targets/urls`             | member | `{ url }`; validated by the SSRF guard at registration and again at fetch time                                                          |
+| POST   | `/projects/{p}/targets/runtime-captures` | member | Upload of HAR / mitmproxy / process capture JSON                                                                                        |
+| GET    | `/projects/{p}/targets`                  | viewer |                                                                                                                                         |
+| GET    | `/projects/{p}/targets/{t}`              | viewer |                                                                                                                                         |
+| GET    | `/projects/{p}/targets/{t}/routing`      | viewer | Route table result: first tool, required providers, candidate runners and unmet reasons                                                 |
+| DELETE | `/projects/{p}/targets/{t}`              | admin  | Refused while referenced by a non-terminal job                                                                                          |
+
+Runner-local targets are registered by the runner (`POST /runners/{r}/local-targets`)
+from its configured allowlist and appear with `kind = runner_local`; the browser
+cannot register arbitrary host paths.
+
+## Investigations and jobs
+
+| Method | Path                                                  | Role   | Notes                                                                                                                                                                                                                                                                                  |
+| ------ | ----------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/projects/{p}/investigations`                        | member | `{ target_id, question, policy }`; creates job `investigation.run`                                                                                                                                                                                                                     |
+| GET    | `/projects/{p}/investigations`                        | viewer |                                                                                                                                                                                                                                                                                        |
+| GET    | `/projects/{p}/investigations/{i}`                    | viewer | Includes job summary, routing, counts                                                                                                                                                                                                                                                  |
+| GET    | `/projects/{p}/investigations/{i}/tool-calls`         | viewer | Paged; derived summaries                                                                                                                                                                                                                                                               |
+| GET    | `/projects/{p}/investigations/{i}/tool-calls/{c}/raw` | viewer | Streams the raw upstream result JSON                                                                                                                                                                                                                                                   |
+| GET    | `/projects/{p}/investigations/{i}/findings`           | viewer | Grouped by class                                                                                                                                                                                                                                                                       |
+| GET    | `/projects/{p}/investigations/{i}/evidence`           | viewer | Evidence artifacts (bundles, exports)                                                                                                                                                                                                                                                  |
+| GET    | `/projects/{p}/investigations/{i}/evidence/{a}`       | viewer | Streams the artifact                                                                                                                                                                                                                                                                   |
+| POST   | `/projects/{p}/investigations/{i}/follow-ups`         | member | `{ tool, arguments }`; validated against the live schema of the owning runner; creates `investigation.follow_up` job routed to the owning session when still alive, otherwise `capability_unavailable` with reason `session_closed` and a hint to re-run with a retained bundle import |
+| POST   | `/projects/{p}/investigations/{i}/exports`            | member | Builds a zip export; job `investigation.export`                                                                                                                                                                                                                                        |
+| POST   | `/projects/{p}/comparisons`                           | member | `{ left: evidence_ref, right: evidence_ref, tool }`; job `investigation.compare`                                                                                                                                                                                                       |
+| GET    | `/projects/{p}/jobs`                                  | viewer | Filters: state, kind                                                                                                                                                                                                                                                                   |
+| GET    | `/projects/{p}/jobs/{j}`                              | viewer | State, attempt, lease summary (runner id, expiry), budget usage                                                                                                                                                                                                                        |
+| GET    | `/projects/{p}/jobs/{j}/events`                       | viewer | SSE; `Last-Event-ID` resume; also `?after=seq` JSON page                                                                                                                                                                                                                               |
+| POST   | `/projects/{p}/jobs/{j}/cancel`                       | member |                                                                                                                                                                                                                                                                                        |
+| POST   | `/projects/{p}/jobs/{j}/approve`                      | member | For `awaiting_approval`; body `{ approval_id }`                                                                                                                                                                                                                                        |
+| POST   | `/projects/{p}/jobs/{j}/reject`                       | member |                                                                                                                                                                                                                                                                                        |
+| GET    | `/projects/{p}/tools`                                 | viewer | Union of advertised tools across the project's runners with per-runner availability (feeds the advanced tool UI)                                                                                                                                                                       |
+
+## Builds, preservation, recovery
+
+| Method | Path                                                      | Role   | Notes                                                                  |
+| ------ | --------------------------------------------------------- | ------ | ---------------------------------------------------------------------- |
+| POST   | `/projects/{p}/builds`                                    | member | `{ name, source, components }`                                         |
+| GET    | `/projects/{p}/builds`, `/builds/{b}`                     | viewer |                                                                        |
+| POST   | `/projects/{p}/builds/{b}/plans`                          | member | Job `preservation.plan`; result is a `preservation_plan`               |
+| GET    | `/projects/{p}/builds/{b}/plans/{pl}`                     | viewer | Components, permissions, dependencies, consistency strategy, omissions |
+| POST   | `/projects/{p}/builds/{b}/captures`                       | member | `{ plan_id }`; job `preservation.capture`                              |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}`                   | viewer | Status, manifest summary, consistency classification                   |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/manifest`          | viewer | Full `manifest.json`                                                   |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/coverage`          | viewer | Per-component status + missing/blocked list                            |
+| POST   | `/projects/{p}/builds/{b}/captures/{c}/verifications`     | member | `{ scope: [...] }`; job `recovery.verify`                              |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/verifications/{v}` | viewer | Per-scope results                                                      |
+| POST   | `/projects/{p}/builds/{b}/captures/{c}/exports`           | member | `{ sign?: key_id, encrypt?: {recipients} }`; job `recovery.export`     |
+| GET    | `/projects/{p}/builds/{b}/exports/{e}`                    | viewer | Streams the tar (and `.sig`); no expiring URLs embedded                |
+
+## Runner protocol (runner token)
+
+| Method | Path                         | Notes                                                                                             |
+| ------ | ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| POST   | `/runners/register`          | Capability report (SS00 §7); returns `runner_id`, server time, protocol version                   |
+| POST   | `/runners/{r}/claim`         | Long-poll up to 25 s; returns `{ job, fencing_token, lease_expires_at }` or 204                   |
+| POST   | `/runners/{r}/heartbeat`     | `{ leases: [{job_id, fencing_token, usage}] }`; response includes `cancel_requested`, `approvals` |
+| POST   | `/runners/{r}/local-targets` | Register runner-local paths from the runner's allowlist                                           |
+| POST   | `/jobs/{j}/events`           | `{ fencing_token, events: [{kind, payload}] }` → assigned seqs                                    |
+| POST   | `/jobs/{j}/tool-calls`       | Fenced; derived summary + raw object key                                                          |
+| POST   | `/jobs/{j}/artifacts/upload` | Fenced; streamed upload to a server-derived key; returns `object_key`, `sha256`                   |
+| GET    | `/jobs/{j}/inputs/{name}`    | Fenced via `X-Fencing-Token`; streams target payload / plan / package inputs                      |
+| POST   | `/jobs/{j}/transition`       | Fenced; `preparing→running`, `running→awaiting_approval` with proposal                            |
+| POST   | `/jobs/{j}/complete`         | Fenced; `{ outcome: succeeded                                                                     | failed, result, failure?, cleanup }` |
+
+## Environment
+
+Names only; values are supplied by the deployment.
+
+| Name                                                                                                                                                       | Component   | Purpose                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------- |
+| `REA_WEB_DATABASE_URL`                                                                                                                                     | api         | PostgreSQL connection                                             |
+| `REA_WEB_SESSION_SECRET`                                                                                                                                   | api         | Cookie signing                                                    |
+| `REA_WEB_PUBLIC_URL`                                                                                                                                       | api/web     | Absolute origin for links                                         |
+| `REA_WEB_ALLOW_REGISTRATION`                                                                                                                               | api         | `true`/`false`                                                    |
+| `REA_WEB_STORAGE_BACKEND`                                                                                                                                  | api         | `fs` or `s3`                                                      |
+| `REA_WEB_STORAGE_FS_ROOT`                                                                                                                                  | api         | Root for `fs` backend                                             |
+| `REA_WEB_S3_ENDPOINT`, `REA_WEB_S3_REGION`, `REA_WEB_S3_BUCKET`, `REA_WEB_S3_ACCESS_KEY_ID`, `REA_WEB_S3_SECRET_ACCESS_KEY`, `REA_WEB_S3_FORCE_PATH_STYLE` | api         | S3 backend                                                        |
+| `REA_WEB_MAX_UPLOAD_BYTES`                                                                                                                                 | api         | Upload cap                                                        |
+| `REA_WEB_LEASE_TTL_MS`                                                                                                                                     | api         | Lease duration (default 60000)                                    |
+| `REA_WEB_IDEMPOTENCY_TTL_MS`                                                                                                                               | api         | Idempotency record retention                                      |
+| `REA_WEB_LOG_LEVEL`                                                                                                                                        | all         | pino level                                                        |
+| `REA_WEB_API_URL`                                                                                                                                          | runner      | Control-plane base URL                                            |
+| `REA_WEB_RUNNER_TOKEN`                                                                                                                                     | runner      | Runner credential                                                 |
+| `REA_WEB_RUNNER_NAME`                                                                                                                                      | runner      | Display name                                                      |
+| `REA_WEB_RUNNER_WORKSPACE_ROOT`                                                                                                                            | runner      | Private workspace root                                            |
+| `REA_WEB_RUNNER_LOCAL_TARGET_ALLOWLIST`                                                                                                                    | runner      | `:`-separated directories whose contents may be registered        |
+| `REA_WEB_RUNNER_MAX_JOBS`                                                                                                                                  | runner      | Concurrency                                                       |
+| `REA_WEB_REA_ROOT`                                                                                                                                         | runner      | Path to the upstream checkout or installed `rea-agents` package   |
+| `REA_WEB_REA_PASSTHROUGH_ENV`                                                                                                                              | runner      | Comma-separated REA_* / provider variable names to pass to REA    |
+| `REA_WEB_MODEL_PROVIDER`                                                                                                                                   | runner      | `disabled` (default), `scripted`, `anthropic`                     |
+| `REA_WEB_ANTHROPIC_API_KEY`                                                                                                                                | runner      | Provider credential (server-side only)                            |
+| `REA_WEB_MODEL_ID`                                                                                                                                         | runner      | Model identifier for the runtime agent                            |
+| `REA_WEB_MODEL_MAX_OUTPUT_TOKENS`                                                                                                                          | runner      | Per-request cap                                                   |
+| `REA_WEB_CAPTURE_DATABASE_URL`                                                                                                                             | runner      | Capture credential for a build's database (distinct from restore) |
+| `REA_RECOVERY_NETWORK`                                                                                                                                     | recover-cli | `deny` (default in verify mode) or `allow`                        |
