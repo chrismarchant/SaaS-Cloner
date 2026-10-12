@@ -1,0 +1,10 @@
+{
+  "name": "rea-web-fixture-notes-cli",
+  "version": "1.2.3",
+  "description": "Small Node CLI fixture for REA Web investigation tests. Not a real product.",
+  "type": "module",
+  "bin": {
+    "notes": "./index.js"
+  },
+  "dependencies": {}
+}

@@ -1,2 +1,9 @@
-// @rea-web/rea-adapter — implemented in later work packages (see docs/IMPLEMENTATION-PLAN.md).
-export const PACKAGE_NAME = "@rea-web/rea-adapter";
+export * from "./environment.js";
+export * from "./ownedProcess.js";
+export * from "./validation.js";
+export * from "./derive.js";
+export * from "./discovery.js";
+export * from "./session.js";
+export * from "./manager.js";
+export * from "./cli.js";
+export * from "./reaRoot.js";
