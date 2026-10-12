@@ -89,14 +89,28 @@ export class UnknownToolError extends Error {
   }
 }
 
-const effectNames = (tool: LiveTool | undefined): string[] => {
+/**
+ * Effects come from the live `binary_session.tool_availability` group that
+ * lists the tool (upstream's closed effect vocabulary, true members only).
+ * When the server reported no group for a tool, the effects are unknown and
+ * the conservative annotation-derived set is returned with a marker.
+ */
+export const effectsForTool = (
+  discovery: Discovery | null,
+  tool: LiveTool | undefined,
+): { effects: string[]; source: "availability_group" | "annotations" } => {
+  const group = discovery?.tool_availability.groups.find((g) =>
+    g.names.includes(tool?.name ?? ""),
+  );
+  if (group && Array.isArray(group.effects))
+    return { effects: [...group.effects], source: "availability_group" };
   const annotations = tool?.annotations ?? {};
   const names: string[] = [];
-  if (annotations["destructiveHint"] === true) names.push("destructiveHint");
-  if (annotations["openWorldHint"] === true) names.push("openWorldHint");
-  if (annotations["readOnlyHint"] === false) names.push("mutatesSession");
+  if (annotations["destructiveHint"] !== false) names.push("mayDiscardData");
+  if (annotations["openWorldHint"] !== false) names.push("accessesNetwork");
+  if (annotations["readOnlyHint"] !== true) names.push("mutatesSession");
   if (annotations["idempotentHint"] === true) names.push("idempotent");
-  return names;
+  return { effects: names, source: "annotations" };
 };
 
 /**
@@ -254,7 +268,7 @@ export class ReaSession {
       duration_ms: Date.now() - startedAt.getTime(),
       raw: result,
       derived,
-      effects: effectNames(tool),
+      effects: effectsForTool(this.discovery, tool).effects,
       validation,
     };
   }

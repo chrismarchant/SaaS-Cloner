@@ -8,6 +8,11 @@ export interface DerivedToolResult {
   readonly evidence_id: string | null;
   readonly operation: string | null;
   readonly kind: string | null;
+  /** Upstream Evidence confidence: observed | derived | inferred. */
+  readonly confidence: string | null;
+  /** Upstream Evidence authority, e.g. shipped-artifact, analyst-inference. */
+  readonly authority: string | null;
+  readonly predicate_type: string | null;
   readonly normalized_result_keys: readonly string[];
   readonly raw_result_present: boolean;
   readonly analysis_profile_present: boolean;
@@ -100,6 +105,9 @@ export const deriveToolResult = (
     evidence_id: str(structured?.["evidence_id"]),
     operation: str(structured?.["operation"]),
     kind: str(structured?.["kind"]),
+    confidence: str(structured?.["confidence"]),
+    authority: str(structured?.["authority"]),
+    predicate_type: str(structured?.["predicate_type"]),
     normalized_result_keys: normalized
       ? Object.keys(normalized).slice(0, 64)
       : [],
