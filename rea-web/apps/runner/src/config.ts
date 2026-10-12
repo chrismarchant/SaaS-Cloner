@@ -36,6 +36,28 @@ const required = (
   return value;
 };
 
+/**
+ * REA_WEB_API_URL wins. On platforms whose variable references cannot be
+ * templated (Railway IaC), the runner composes the private-network URL from
+ * REA_WEB_API_PRIVATE_HOST and REA_WEB_API_PORT instead.
+ */
+const resolveApiUrl = (
+  env: Readonly<Record<string, string | undefined>>,
+): string => {
+  const explicit = env["REA_WEB_API_URL"];
+  if (explicit) return explicit.replace(/\/+$/u, "");
+  const host = env["REA_WEB_API_PRIVATE_HOST"];
+  if (host) {
+    if (!/^[A-Za-z0-9.-]+$/u.test(host))
+      throw new Error("REA_WEB_API_PRIVATE_HOST is not a hostname");
+    const port = Number(env["REA_WEB_API_PORT"] ?? 8080);
+    if (!Number.isInteger(port) || port < 1 || port > 65_535)
+      throw new Error("REA_WEB_API_PORT is not a valid port");
+    return `http://${host}:${port}`;
+  }
+  throw new Error("REA_WEB_API_URL or REA_WEB_API_PRIVATE_HOST is required");
+};
+
 const list = (value: string | undefined, separator: string): string[] =>
   (value ?? "")
     .split(separator)
@@ -66,7 +88,7 @@ export const parseRunnerConfig = (
         `REA_WEB_REA_PASSTHROUGH_ENV contains an invalid or control-plane variable name`,
       );
   return {
-    apiUrl: required(env, "REA_WEB_API_URL").replace(/\/+$/u, ""),
+    apiUrl: resolveApiUrl(env),
     runnerToken: required(env, "REA_WEB_RUNNER_TOKEN"),
     runnerName: env["REA_WEB_RUNNER_NAME"] ?? "runner",
     workspaceRoot: resolve(

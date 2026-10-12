@@ -1,0 +1,17 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.turbo
+.cache
+skills
+docs/public/product-catalog.json
+docs/verification/managed-conformance-*.json
+website
+third_party/*/
+!third_party/pwntools
+!third_party/pwndbg
+!third_party/wabt
+!third_party/evmole
+rea-web/.rea-web-data
+rea-web/tools/parity-matrix/probes
