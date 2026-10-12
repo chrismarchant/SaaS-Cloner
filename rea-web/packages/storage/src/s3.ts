@@ -24,7 +24,6 @@ import {
   checkWritten,
   normalisePutOptions,
   parseSha256,
-  toReadable,
   type NormalisedPutOptions,
 } from "./stream.js";
 import type {
@@ -77,7 +76,9 @@ const normalisePrefix = (prefix: string | undefined): string => {
   return `${trimmed}/`;
 };
 
-export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore {
+export function createS3ObjectStore(
+  options: S3ObjectStoreOptions,
+): ObjectStore {
   const { bucket } = options;
   const storePrefix = normalisePrefix(options.prefix);
   const client = new S3Client({
@@ -150,12 +151,12 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
       },
     });
     try {
-      const piped = pipeline(source, meter, { signal: controller.signal }).catch(
-        (error: unknown) => {
-          void upload.abort().catch(() => undefined);
-          throw error;
-        },
-      );
+      const piped = pipeline(source, meter, {
+        signal: controller.signal,
+      }).catch((error: unknown) => {
+        void upload.abort().catch(() => undefined);
+        throw error;
+      });
       const uploaded = upload.done().catch((error: unknown) => {
         controller.abort(error);
         throw error;
@@ -235,7 +236,8 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
         }),
       );
     } catch (error) {
-      if (httpStatus(error) !== 412) await deleteRemote(key).catch(() => undefined);
+      if (httpStatus(error) !== 412)
+        await deleteRemote(key).catch(() => undefined);
       throw error;
     }
   };
@@ -346,7 +348,9 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
     validateListPrefix(prefix);
     const limit = listOptions?.limit ?? DEFAULT_LIST_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT)
-      throw new RangeError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}`);
+      throw new RangeError(
+        `limit must be an integer from 1 to ${MAX_LIST_LIMIT}`,
+      );
     const response = await client.send(
       new ListObjectsV2Command({
         Bucket: bucket,

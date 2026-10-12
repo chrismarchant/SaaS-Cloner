@@ -64,7 +64,8 @@ describe("createObjectStoreFromEnv", () => {
       message = (error as Error).message;
     }
     expect(message).toContain(name);
-    for (const value of Object.values(env)) expect(message).not.toContain(value);
+    for (const value of Object.values(env))
+      expect(message).not.toContain(value);
   });
 
   it("treats an empty variable as missing and names the fs root", () => {

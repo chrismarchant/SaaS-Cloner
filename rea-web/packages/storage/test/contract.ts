@@ -76,7 +76,9 @@ export function describeObjectStoreContract(
 
         await store.delete(key);
         expect(await store.head(key)).toBeNull();
-        await expect(store.get(key)).rejects.toBeInstanceOf(ObjectNotFoundError);
+        await expect(store.get(key)).rejects.toBeInstanceOf(
+          ObjectNotFoundError,
+        );
       });
     }
 
@@ -94,7 +96,10 @@ export function describeObjectStoreContract(
       const put = await store.put("k/random", Readable.from([bytes]));
       expect(put.sha256).toBe(sha256Hex(bytes));
       const measured = await sha256Stream(await store.get("k/random"));
-      expect(measured).toEqual({ sha256: sha256Hex(bytes), size: bytes.length });
+      expect(measured).toEqual({
+        sha256: sha256Hex(bytes),
+        size: bytes.length,
+      });
     });
 
     it("pages list results with limit 2 across 5 keys", async () => {
@@ -146,9 +151,13 @@ export function describeObjectStoreContract(
     });
 
     it("accepts a body exactly at maxBytes", async () => {
-      const put = await store.put("big/exact", Readable.from([Buffer.alloc(8)]), {
-        maxBytes: 8,
-      });
+      const put = await store.put(
+        "big/exact",
+        Readable.from([Buffer.alloc(8)]),
+        {
+          maxBytes: 8,
+        },
+      );
       expect(put.size).toBe(8);
     });
 

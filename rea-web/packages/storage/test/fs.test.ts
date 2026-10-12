@@ -122,7 +122,9 @@ describe("fs backend specifics", () => {
   it("delete removes the object and its sidecar", async () => {
     await store.put("d/obj", "x");
     await store.delete("d/obj");
-    expect((await listFiles(root)).filter((f) => f.includes("obj"))).toEqual([]);
+    expect((await listFiles(root)).filter((f) => f.includes("obj"))).toEqual(
+      [],
+    );
   });
 
   it("reserves the internal .tmp and .meta names", async () => {
@@ -130,7 +132,9 @@ describe("fs backend specifics", () => {
       await expect(store.put(key, "x")).rejects.toBeInstanceOf(
         InvalidObjectKeyError,
       );
-      await expect(store.get(key)).rejects.toBeInstanceOf(InvalidObjectKeyError);
+      await expect(store.get(key)).rejects.toBeInstanceOf(
+        InvalidObjectKeyError,
+      );
     }
     expect(await store.list(".meta/")).toEqual({ keys: [], nextCursor: null });
   });
@@ -221,7 +225,9 @@ describe("fs backend specifics", () => {
     it("does not delete a symlink or its target", async () => {
       await store.delete("link-file");
       await store.delete("link-dir/secret.txt");
-      expect((await lstat(join(root, "link-file"))).isSymbolicLink()).toBe(true);
+      expect((await lstat(join(root, "link-file"))).isSymbolicLink()).toBe(
+        true,
+      );
       expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe(secret);
     });
 

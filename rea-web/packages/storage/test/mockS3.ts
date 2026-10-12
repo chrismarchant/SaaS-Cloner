@@ -123,7 +123,9 @@ export async function startMockS3(bucket: string): Promise<MockS3> {
     const after =
       token === null ? "" : Buffer.from(token, "base64url").toString("utf8");
     const matching = [...objects.keys()]
-      .filter((key) => key.startsWith(prefix) && (token === null || key > after))
+      .filter(
+        (key) => key.startsWith(prefix) && (token === null || key > after),
+      )
       .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     const page = matching.slice(0, maxKeys);
     const truncated = matching.length > page.length;
@@ -162,7 +164,10 @@ export async function startMockS3(bucket: string): Promise<MockS3> {
     url.searchParams.delete("x-id");
     requests.push(`${method} ${url.pathname}${url.search}`);
     const bucketPath = `/${bucket}`;
-    if (url.pathname !== bucketPath && !url.pathname.startsWith(`${bucketPath}/`))
+    if (
+      url.pathname !== bucketPath &&
+      !url.pathname.startsWith(`${bucketPath}/`)
+    )
       return sendError(res, 404, "NoSuchBucket", method);
     const key = decodeURIComponent(url.pathname.slice(bucketPath.length + 1));
     const query = url.searchParams;
@@ -193,7 +198,8 @@ export async function startMockS3(bucket: string): Promise<MockS3> {
     if (method === "PUT" && query.has("uploadId") && query.has("partNumber")) {
       const upload = uploads.get(query.get("uploadId") ?? "");
       const body = await readBody(req);
-      if (upload === undefined) return sendError(res, 404, "NoSuchUpload", method);
+      if (upload === undefined)
+        return sendError(res, 404, "NoSuchUpload", method);
       upload.parts.set(Number(query.get("partNumber")), body);
       res.writeHead(200, { etag: `"${md5(body)}"` });
       return void res.end();
@@ -203,7 +209,8 @@ export async function startMockS3(bucket: string): Promise<MockS3> {
       await readBody(req);
       const uploadId = query.get("uploadId") ?? "";
       const upload = uploads.get(uploadId);
-      if (upload === undefined) return sendError(res, 404, "NoSuchUpload", method);
+      if (upload === undefined)
+        return sendError(res, 404, "NoSuchUpload", method);
       const ordered = [...upload.parts.entries()].sort(([a], [b]) => a - b);
       const body = Buffer.concat(ordered.map(([, part]) => part));
       const object = store(

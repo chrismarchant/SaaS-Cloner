@@ -374,7 +374,9 @@ export function createFsObjectStore(options: { root: string }): ObjectStore {
     validateListPrefix(prefix);
     const limit = listOptions?.limit ?? DEFAULT_LIST_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT)
-      throw new RangeError(`limit must be an integer from 1 to ${MAX_LIST_LIMIT}`);
+      throw new RangeError(
+        `limit must be an integer from 1 to ${MAX_LIST_LIMIT}`,
+      );
     if (prefix !== "" && RESERVED_ROOT_NAMES.has(prefix.split("/")[0] ?? ""))
       return { keys: [], nextCursor: null };
 

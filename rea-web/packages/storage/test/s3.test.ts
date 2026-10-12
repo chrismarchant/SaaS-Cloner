@@ -59,13 +59,19 @@ describe("s3 backend specifics", () => {
     });
     const parts = mock.requests.filter((r) => /partNumber=/u.test(r));
     expect(parts).toHaveLength(2);
-    expect(mock.requests.some((r) => r.startsWith("POST") && r.includes("uploads"))).toBe(true);
+    expect(
+      mock.requests.some((r) => r.startsWith("POST") && r.includes("uploads")),
+    ).toBe(true);
     expect(mock.uploads.size).toBe(0);
     expect(mock.objects.get("big/stream")?.body.equals(bytes)).toBe(true);
     // The digest is attached after a streamed upload.
-    expect(mock.objects.get("big/stream")?.metadata["sha256"]).toBe(sha256Hex(bytes));
+    expect(mock.objects.get("big/stream")?.metadata["sha256"]).toBe(
+      sha256Hex(bytes),
+    );
     expect((await store.head("big/stream"))?.sha256).toBe(sha256Hex(bytes));
-    expect(await readAll(await store.get("big/stream"))).toEqual(bytes);
+    expect((await readAll(await store.get("big/stream"))).equals(bytes)).toBe(
+      true,
+    );
   });
 
   it("uploads a 6 MiB Buffer via multipart with the digest set up front", async () => {
@@ -74,9 +80,20 @@ describe("s3 backend specifics", () => {
     const put = await store.put("big/buffer", bytes);
     expect(put.sha256).toBe(sha256Hex(bytes));
     expect(mock.requests.filter((r) => /partNumber=/u.test(r))).toHaveLength(2);
-    expect(mock.requests.some((r) => r.startsWith("PUT") && !r.includes("partNumber") && !r.includes("big/buffer"))).toBe(false);
-    expect(mock.objects.get("big/buffer")?.metadata["sha256"]).toBe(sha256Hex(bytes));
-    expect(await readAll(await store.get("big/buffer"))).toEqual(bytes);
+    expect(
+      mock.requests.some(
+        (r) =>
+          r.startsWith("PUT") &&
+          !r.includes("partNumber") &&
+          !r.includes("big/buffer"),
+      ),
+    ).toBe(false);
+    expect(mock.objects.get("big/buffer")?.metadata["sha256"]).toBe(
+      sha256Hex(bytes),
+    );
+    expect((await readAll(await store.get("big/buffer"))).equals(bytes)).toBe(
+      true,
+    );
   });
 
   it("uses a single PutObject for small bodies and records the digest and type", async () => {
@@ -96,20 +113,28 @@ describe("s3 backend specifics", () => {
       contentType: "text/plain",
     });
     expect(mock.requests).toEqual([`PUT /${BUCKET}/small/stream`]);
-    expect(mock.objects.get("small/stream")?.metadata["sha256"]).toBe(sha256Hex("abc"));
+    expect(mock.objects.get("small/stream")?.metadata["sha256"]).toBe(
+      sha256Hex("abc"),
+    );
   });
 
   it("preserves the content type when attaching a digest to a streamed upload", async () => {
     const store = create();
-    await store.put("small/typed", Readable.from(["abc"]), { contentType: "text/x-typed" });
+    await store.put("small/typed", Readable.from(["abc"]), {
+      contentType: "text/x-typed",
+    });
     expect(mock.objects.get("small/typed")?.contentType).toBe("text/x-typed");
-    expect(mock.objects.get("small/typed")?.metadata["sha256"]).toBe(sha256Hex("abc"));
+    expect(mock.objects.get("small/typed")?.metadata["sha256"]).toBe(
+      sha256Hex("abc"),
+    );
   });
 
   it("removes a streamed object whose digest does not match", async () => {
     const store = create();
     await expect(
-      store.put("bad/stream", Readable.from(["abc"]), { expectedSha256: "0".repeat(64) }),
+      store.put("bad/stream", Readable.from(["abc"]), {
+        expectedSha256: "0".repeat(64),
+      }),
     ).rejects.toBeInstanceOf(ObjectIntegrityError);
     expect(mock.objects.has("bad/stream")).toBe(false);
   });
@@ -118,12 +143,18 @@ describe("s3 backend specifics", () => {
     const store = create();
     const chunks = Array.from({ length: 96 }, () => Buffer.alloc(64 * 1024));
     await expect(
-      store.put("big/capped", Readable.from(chunks), { maxBytes: 6 * 1024 * 1024 }),
+      store.put("big/capped", Readable.from(chunks), {
+        maxBytes: 6 * 1024 * 1024,
+      }),
     ).resolves.toMatchObject({ size: 96 * 64 * 1024 });
     mock.objects.clear();
-    const oversized = Array.from({ length: 200 }, () => Buffer.alloc(64 * 1024));
+    const oversized = Array.from({ length: 200 }, () =>
+      Buffer.alloc(64 * 1024),
+    );
     await expect(
-      store.put("big/capped", Readable.from(oversized), { maxBytes: 7 * 1024 * 1024 }),
+      store.put("big/capped", Readable.from(oversized), {
+        maxBytes: 7 * 1024 * 1024,
+      }),
     ).rejects.toMatchObject({ name: "ObjectTooLargeError" });
     expect(mock.objects.has("big/capped")).toBe(false);
     expect(mock.uploads.size).toBe(0);
@@ -151,7 +182,10 @@ describe("s3 backend specifics", () => {
     mock.requests.length = 0;
     const first = await store.list("p/", { limit: 2 });
     expect(first.nextCursor).not.toBeNull();
-    const second = await store.list("p/", { limit: 2, cursor: first.nextCursor ?? "" });
+    const second = await store.list("p/", {
+      limit: 2,
+      cursor: first.nextCursor ?? "",
+    });
     expect(second.keys.map((k) => k.key)).toEqual(["p/c"]);
     expect(second.nextCursor).toBeNull();
     expect(mock.requests[0]).toMatch(/max-keys=2/u);
@@ -168,7 +202,9 @@ describe("s3 backend specifics", () => {
       "tenant-2/a/obj",
     ]);
     expect((await store.list("")).keys.map((k) => k.key)).toEqual(["a/obj"]);
-    expect(await readAll(await store.get("a/obj"))).toEqual(Buffer.from("mine"));
+    expect(await readAll(await store.get("a/obj"))).toEqual(
+      Buffer.from("mine"),
+    );
     await store.delete("a/obj");
     expect(await store.head("a/obj")).toBeNull();
     expect(await other.head("a/obj")).not.toBeNull();
@@ -197,12 +233,16 @@ describe("s3 backend specifics", () => {
 
   it("validates presign keys and ttl", async () => {
     const store = create();
-    await expect(store.presignGet?.("../x", 60)).rejects.toBeInstanceOf(InvalidObjectKeyError);
+    await expect(store.presignGet?.("../x", 60)).rejects.toBeInstanceOf(
+      InvalidObjectKeyError,
+    );
     await expect(store.presignGet?.("a", 0)).rejects.toBeInstanceOf(RangeError);
   });
 
-  it("does not expose presignGet-less behaviour on fs", async () => {
+  it("has no presignGet on the fs backend", async () => {
     const { createFsObjectStore } = await import("../src/index.js");
-    expect(createFsObjectStore({ root: "/nonexistent-root" }).presignGet).toBeUndefined();
+    expect(
+      createFsObjectStore({ root: "/nonexistent-root" }).presignGet,
+    ).toBeUndefined();
   });
 });
