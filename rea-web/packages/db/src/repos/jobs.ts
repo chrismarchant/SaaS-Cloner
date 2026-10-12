@@ -98,7 +98,10 @@ export interface ReapOutcome {
   outcome: "requeued" | "failed";
   /** Attempt number the job holds after reaping. */
   attempt: number;
-  reason: "lease_expired" | "retries_exhausted" | "non_repeatable_effect_ambiguous";
+  reason:
+    | "lease_expired"
+    | "retries_exhausted"
+    | "non_repeatable_effect_ambiguous";
 }
 
 export interface JobsRepository {
@@ -251,13 +254,14 @@ async function readLease(
 
 function checkLease(
   lease: LeaseRow | null,
-  presented: { runner_id?: string | undefined; fencing_token?: number | undefined },
+  presented: Presented,
 ): HeartbeatRejection | null {
   if (lease === null) return "not_leased";
   if (
     presented.fencing_token === undefined ||
     lease.fencing_token !== presented.fencing_token ||
-    (presented.runner_id !== undefined && lease.runner_id !== presented.runner_id)
+    (presented.runner_id !== undefined &&
+      lease.runner_id !== presented.runner_id)
   ) {
     return "stale_lease";
   }
@@ -281,7 +285,7 @@ async function recordStale(
   operation: string,
   reason: HeartbeatRejection,
   lease: LeaseRow | null,
-  presented: { runner_id?: string | undefined; fencing_token?: number | undefined },
+  presented: Presented,
 ): Promise<void> {
   await appendJobEvent(client, job_id, "job.stale_rejected", {
     operation,
@@ -290,6 +294,39 @@ async function recordStale(
     presented_fencing_token: presented.fencing_token ?? null,
     current_fencing_token: lease?.fencing_token ?? null,
   });
+}
+
+interface Presented {
+  runner_id?: string | undefined;
+  fencing_token?: number | undefined;
+}
+
+/**
+ * Fencing for runner-originated writes, evaluated before state validation so a
+ * superseded runner always learns it is stale. A job that has never been
+ * claimed (no fencing history) falls through to state validation instead,
+ * which reports the more useful `invalid_transition`.
+ */
+async function fence(
+  client: pg.PoolClient,
+  job_id: string,
+  operation: string,
+  presented: Presented,
+): Promise<{ lease: LeaseRow | null; rejected: ApiError | null }> {
+  const lease = await readLease(client, job_id);
+  let rejection: HeartbeatRejection | null = null;
+  if (lease !== null) {
+    rejection = checkLease(lease, presented);
+  } else {
+    const history = await client.query<{ last_token: number }>(
+      "SELECT last_token FROM job_fencing WHERE job_id = $1",
+      [job_id],
+    );
+    if ((history.rows[0]?.last_token ?? 0) > 0) rejection = "not_leased";
+  }
+  if (rejection === null) return { lease, rejected: null };
+  await recordStale(client, job_id, operation, rejection, lease, presented);
+  return { lease, rejected: staleError(rejection) };
 }
 
 const leaseTtl = (ms: number): number => {
@@ -317,7 +354,10 @@ export function jobsRepository(db: Database): JobsRepository {
     );
     const budget = jobBudgetSchema.safeParse(input.budget);
     if (!requirements.success || !budget.success) {
-      throw new ApiError("validation_failed", "invalid job requirements or budget");
+      throw new ApiError(
+        "validation_failed",
+        "invalid job requirements or budget",
+      );
     }
     const maxAttempts = input.max_attempts ?? 3;
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
@@ -363,7 +403,10 @@ export function jobsRepository(db: Database): JobsRepository {
       const projectId = runner.rows[0]?.project_id;
       if (projectId === undefined) return null;
 
-      const candidates = await client.query<{ id: string; requirements: unknown }>(
+      const candidates = await client.query<{
+        id: string;
+        requirements: unknown;
+      }>(
         `SELECT id, requirements FROM jobs
          WHERE state = 'queued' AND project_id = $2
            AND (preferred_runner_id IS NULL OR preferred_runner_id = $1)
@@ -423,15 +466,31 @@ export function jobsRepository(db: Database): JobsRepository {
     };
     return db.withTransaction(async (client) => {
       const job = await lockJobOrNull(client, input.job_id);
-      if (job === null) return { accepted: false, reason: "not_leased", cancel_requested: false };
+      if (job === null)
+        return {
+          accepted: false,
+          reason: "not_leased",
+          cancel_requested: false,
+        };
       const cancelRequested = job.cancel_requested_at !== null;
       const lease = await readLease(client, input.job_id);
       const rejection = checkLease(lease, presented);
       if (rejection !== null) {
         if (rejection === "stale_lease") {
-          await recordStale(client, input.job_id, "heartbeat", rejection, lease, presented);
+          await recordStale(
+            client,
+            input.job_id,
+            "heartbeat",
+            rejection,
+            lease,
+            presented,
+          );
         }
-        return { accepted: false, reason: rejection, cancel_requested: cancelRequested };
+        return {
+          accepted: false,
+          reason: rejection,
+          cancel_requested: cancelRequested,
+        };
       }
       const extended = await client.query<{ expires_at: string }>(
         `UPDATE job_leases SET expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond')
@@ -447,7 +506,8 @@ export function jobsRepository(db: Database): JobsRepository {
       return {
         accepted: true,
         cancel_requested: cancelRequested,
-        lease_expires_at: (extended.rows[0] as { expires_at: string }).expires_at,
+        lease_expires_at: (extended.rows[0] as { expires_at: string })
+          .expires_at,
       };
     });
   }
@@ -456,6 +516,18 @@ export function jobsRepository(db: Database): JobsRepository {
     const outcome = await db.withTransaction(
       async (client): Promise<JobRecord | Rejected> => {
         const job = await lockJob(client, input.job_id);
+        const presented = { fencing_token: input.fencing_token };
+        let leased = false;
+        if (input.actor === "runner") {
+          const fenced = await fence(
+            client,
+            input.job_id,
+            "transition",
+            presented,
+          );
+          if (fenced.rejected !== null) return { rejected: fenced.rejected };
+          leased = fenced.lease !== null;
+        }
         // `queued -> preparing` creates a lease and fencing token; only claim() may do it.
         if (
           input.to === "preparing" ||
@@ -467,14 +539,16 @@ export function jobsRepository(db: Database): JobsRepository {
             { from: job.state, to: input.to, actor: input.actor },
           );
         }
-        if (input.actor === "runner") {
-          const presented = { fencing_token: input.fencing_token };
-          const lease = await readLease(client, input.job_id);
-          const rejection = checkLease(lease, presented);
-          if (rejection !== null) {
-            await recordStale(client, input.job_id, "transition", rejection, lease, presented);
-            return { rejected: staleError(rejection) };
-          }
+        if (input.actor === "runner" && !leased) {
+          await recordStale(
+            client,
+            input.job_id,
+            "transition",
+            "not_leased",
+            null,
+            presented,
+          );
+          return { rejected: staleError("not_leased") };
         }
         const sets = ["state = $2", "updated_at = clock_timestamp()"];
         const params: unknown[] = [input.job_id, input.to];
@@ -485,9 +559,14 @@ export function jobsRepository(db: Database): JobsRepository {
           params.push(json(input.failure));
           sets.push(`failure = $${params.length}::jsonb`);
         }
-        await client.query(`UPDATE jobs SET ${sets.join(", ")} WHERE id = $1`, params);
+        await client.query(
+          `UPDATE jobs SET ${sets.join(", ")} WHERE id = $1`,
+          params,
+        );
         if (RELEASES_LEASE.has(input.to)) {
-          await client.query("DELETE FROM job_leases WHERE job_id = $1", [input.job_id]);
+          await client.query("DELETE FROM job_leases WHERE job_id = $1", [
+            input.job_id,
+          ]);
         }
         await appendJobEvent(client, input.job_id, "job.transition", {
           ...input.event_payload,
@@ -510,6 +589,8 @@ export function jobsRepository(db: Database): JobsRepository {
     const outcome = await db.withTransaction(
       async (client): Promise<JobRecord | Rejected> => {
         const job = await lockJob(client, input.job_id);
+        const fenced = await fence(client, input.job_id, "complete", presented);
+        if (fenced.rejected !== null) return { rejected: fenced.rejected };
         if (!canTransition(job.state, input.outcome, "runner")) {
           throw new ApiError(
             "invalid_transition",
@@ -517,11 +598,16 @@ export function jobsRepository(db: Database): JobsRepository {
             { from: job.state, to: input.outcome, actor: "runner" },
           );
         }
-        const lease = await readLease(client, input.job_id);
-        const rejection = checkLease(lease, presented);
-        if (rejection !== null) {
-          await recordStale(client, input.job_id, "complete", rejection, lease, presented);
-          return { rejected: staleError(rejection) };
+        if (fenced.lease === null) {
+          await recordStale(
+            client,
+            input.job_id,
+            "complete",
+            "not_leased",
+            null,
+            presented,
+          );
+          return { rejected: staleError("not_leased") };
         }
         await client.query(
           `UPDATE jobs SET state = $2, result = $3::jsonb, failure = $4::jsonb,
@@ -530,12 +616,18 @@ export function jobsRepository(db: Database): JobsRepository {
           [
             input.job_id,
             input.outcome,
-            input.result === undefined || input.result === null ? null : json(input.result),
-            input.failure === undefined || input.failure === null ? null : json(input.failure),
+            input.result === undefined || input.result === null
+              ? null
+              : json(input.result),
+            input.failure === undefined || input.failure === null
+              ? null
+              : json(input.failure),
             json(input.usage ?? {}),
           ],
         );
-        await client.query("DELETE FROM job_leases WHERE job_id = $1", [input.job_id]);
+        await client.query("DELETE FROM job_leases WHERE job_id = $1", [
+          input.job_id,
+        ]);
         await appendJobEvent(client, input.job_id, "job.completed", {
           outcome: input.outcome,
           from: job.state,
@@ -643,7 +735,9 @@ export function jobsRepository(db: Database): JobsRepository {
         reason: "lease_expired",
       };
     }
-    const reason = ambiguous ? "non_repeatable_effect_ambiguous" : "retries_exhausted";
+    const reason = ambiguous
+      ? "non_repeatable_effect_ambiguous"
+      : "retries_exhausted";
     const failure: JobFailure = {
       code: "interrupted",
       message: ambiguous
@@ -679,7 +773,9 @@ export function jobsRepository(db: Database): JobsRepository {
       if (expired.rows.length === 0) break;
       let progressed = 0;
       for (const { job_id } of expired.rows) {
-        const outcome = await db.withTransaction((c) => reapOne(c, job_id, nowIso));
+        const outcome = await db.withTransaction((c) =>
+          reapOne(c, job_id, nowIso),
+        );
         if (outcome !== null) {
           outcomes.push(outcome);
           progressed += 1;

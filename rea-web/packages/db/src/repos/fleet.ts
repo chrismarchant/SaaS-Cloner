@@ -70,9 +70,10 @@ export function runnersRepository(db: Database): RunnersRepository {
     async findById(project_id, id) {
       const result =
         project_id === undefined
-          ? await db.query<RunnerRecord>("SELECT * FROM runners WHERE id = $1", [
-              id,
-            ])
+          ? await db.query<RunnerRecord>(
+              "SELECT * FROM runners WHERE id = $1",
+              [id],
+            )
           : await db.query<RunnerRecord>(
               "SELECT * FROM runners WHERE id = $1 AND project_id = $2",
               [id, project_id],
@@ -198,7 +199,10 @@ export function targetsRepository(db: Database): TargetsRepository {
         return (result.rowCount ?? 0) > 0;
       } catch (error) {
         if (pgErrorCode(error) === PG_FOREIGN_KEY_VIOLATION) {
-          throw new ApiError("conflict", "target is referenced by investigations");
+          throw new ApiError(
+            "conflict",
+            "target is referenced by investigations",
+          );
         }
         throw error;
       }

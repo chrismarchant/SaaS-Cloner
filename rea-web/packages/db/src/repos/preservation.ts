@@ -104,7 +104,12 @@ export function plansRepository(db: Database): PlansRepository {
       const result = await executor(db, client).query<PlanRecord>(
         `INSERT INTO preservation_plans(id, build_id, job_id, runner_id)
          VALUES ($1,$2,$3,$4) RETURNING *`,
-        [input.id ?? uuidv7(), input.build_id, input.job_id, input.runner_id ?? null],
+        [
+          input.id ?? uuidv7(),
+          input.build_id,
+          input.job_id,
+          input.runner_id ?? null,
+        ],
       );
       return result.rows[0] as PlanRecord;
     },
@@ -227,7 +232,12 @@ export interface VerificationUpdate {
 
 export interface VerificationsRepository {
   create(
-    input: { id?: string; capture_id: string; job_id: string; scope: JsonObject },
+    input: {
+      id?: string;
+      capture_id: string;
+      job_id: string;
+      scope: JsonObject;
+    },
     client?: pg.PoolClient,
   ): Promise<VerificationRecord>;
   /** Scoped to the owning project through capture and build. */
@@ -243,15 +253,18 @@ export interface VerificationsRepository {
   ): Promise<VerificationRecord | null>;
 }
 
-export function verificationsRepository(
-  db: Database,
-): VerificationsRepository {
+export function verificationsRepository(db: Database): VerificationsRepository {
   return {
     async create(input, client) {
       const result = await executor(db, client).query<VerificationRecord>(
         `INSERT INTO verifications(id, capture_id, job_id, scope)
          VALUES ($1,$2,$3,$4::jsonb) RETURNING *`,
-        [input.id ?? uuidv7(), input.capture_id, input.job_id, json(input.scope)],
+        [
+          input.id ?? uuidv7(),
+          input.capture_id,
+          input.job_id,
+          json(input.scope),
+        ],
       );
       return result.rows[0] as VerificationRecord;
     },
@@ -280,11 +293,17 @@ export function verificationsRepository(
         ...page,
       }),
     update: (id, patch) =>
-      patchRow<VerificationRecord>(db, "verifications", id, { ...patch }, {
-        results: "json",
-        network_required: "json",
-        overall: "plain",
-      }),
+      patchRow<VerificationRecord>(
+        db,
+        "verifications",
+        id,
+        { ...patch },
+        {
+          results: "json",
+          network_required: "json",
+          overall: "plain",
+        },
+      ),
   };
 }
 
@@ -346,13 +365,19 @@ export function exportsRepository(db: Database): ExportsRepository {
         ...page,
       }),
     update: (id, patch) =>
-      patchRow<ExportRecord>(db, "exports", id, { ...patch }, {
-        status: "plain",
-        object_key: "plain",
-        sha256: "plain",
-        size: "plain",
-        signature: "json",
-        encryption: "json",
-      }),
+      patchRow<ExportRecord>(
+        db,
+        "exports",
+        id,
+        { ...patch },
+        {
+          status: "plain",
+          object_key: "plain",
+          sha256: "plain",
+          size: "plain",
+          signature: "json",
+          encryption: "json",
+        },
+      ),
   };
 }

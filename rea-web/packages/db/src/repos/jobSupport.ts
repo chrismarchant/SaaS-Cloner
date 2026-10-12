@@ -211,7 +211,10 @@ export function idempotencyRepository(db: Database): IdempotencyRepository {
           json(input.response),
         ],
       );
-      return firstRow(result.rows) ?? ((await find(input.principal_id, input.key)) as IdempotencyRecord);
+      return (
+        firstRow(result.rows) ??
+        ((await find(input.principal_id, input.key)) as IdempotencyRecord)
+      );
     },
     async purgeOlderThan(ms) {
       const result = await db.query(

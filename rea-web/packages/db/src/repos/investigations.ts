@@ -34,10 +34,7 @@ export interface InvestigationsRepository {
     },
     client?: pg.PoolClient,
   ): Promise<InvestigationRecord>;
-  findById(
-    project_id: string,
-    id: string,
-  ): Promise<InvestigationRecord | null>;
+  findById(project_id: string, id: string): Promise<InvestigationRecord | null>;
   /** Runner-side lookup: the investigation a job belongs to. */
   findByJobId(job_id: string): Promise<InvestigationRecord | null>;
   list(
@@ -160,7 +157,10 @@ export interface ToolCallsRepository {
    */
   create(input: CreateToolCallInput): Promise<ToolCallRecord>;
   findById(id: string): Promise<ToolCallRecord | null>;
-  findBySeq(investigation_id: string, seq: number): Promise<ToolCallRecord | null>;
+  findBySeq(
+    investigation_id: string,
+    seq: number,
+  ): Promise<ToolCallRecord | null>;
   findByEvidenceId(
     investigation_id: string,
     evidence_id: string,
@@ -219,10 +219,10 @@ export function toolCallsRepository(db: Database): ToolCallsRepository {
     },
     findById: (id) => one("SELECT * FROM tool_calls WHERE id = $1", [id]),
     findBySeq: (investigation_id, seq) =>
-      one(
-        "SELECT * FROM tool_calls WHERE investigation_id = $1 AND seq = $2",
-        [investigation_id, seq],
-      ),
+      one("SELECT * FROM tool_calls WHERE investigation_id = $1 AND seq = $2", [
+        investigation_id,
+        seq,
+      ]),
     findByEvidenceId: (investigation_id, evidence_id) =>
       one(
         `SELECT * FROM tool_calls WHERE investigation_id = $1 AND evidence_id = $2
@@ -233,7 +233,11 @@ export function toolCallsRepository(db: Database): ToolCallsRepository {
       const result = await db.query<ToolCallRecord>(
         `SELECT * FROM tool_calls WHERE investigation_id = $1 AND seq > $2
          ORDER BY seq LIMIT $3`,
-        [investigation_id, options.afterSeq ?? 0, clampLimit(options.limit, 1000)],
+        [
+          investigation_id,
+          options.afterSeq ?? 0,
+          clampLimit(options.limit, 1000),
+        ],
       );
       return result.rows;
     },
@@ -315,10 +319,7 @@ export interface FindingsRepository {
   create(input: CreateFindingInput): Promise<FindingRecord>;
   /** All-or-nothing batch insert, in input order. */
   createMany(inputs: CreateFindingInput[]): Promise<FindingRecord[]>;
-  findById(
-    investigation_id: string,
-    id: string,
-  ): Promise<FindingRecord | null>;
+  findById(investigation_id: string, id: string): Promise<FindingRecord | null>;
   listByInvestigation(
     investigation_id: string,
     options?: { class?: FindingClass },

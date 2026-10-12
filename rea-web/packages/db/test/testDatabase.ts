@@ -18,7 +18,8 @@ if (TEST_DATABASE_URL === undefined) {
 }
 
 /** `describe` that is skipped (with the warning above) when no test server is configured. */
-export const describeDb = TEST_DATABASE_URL === undefined ? describe.skip : describe;
+export const describeDb: (name: string, fn: () => void) => void =
+  TEST_DATABASE_URL === undefined ? describe.skip : describe;
 
 export interface TestDatabase {
   name: string;

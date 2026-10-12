@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { runMigrations } from "../src/index.js";
-import { type TestDatabase, createTestDatabase, describeDb } from "./testDatabase.js";
+import {
+  type TestDatabase,
+  createTestDatabase,
+  describeDb,
+} from "./testDatabase.js";
 
 describeDb("migrations", () => {
   let t: TestDatabase;
@@ -18,7 +22,10 @@ describeDb("migrations", () => {
     // Two independent pools race for the same migration.
     const a = t.open(2);
     const b = t.open(2);
-    const [first, second] = await Promise.all([runMigrations(a), runMigrations(b)]);
+    const [first, second] = await Promise.all([
+      runMigrations(a),
+      runMigrations(b),
+    ]);
 
     const applied = [...first.applied, ...second.applied];
     expect(applied).toEqual(["0001_initial"]);
@@ -42,9 +49,15 @@ describeDb("migrations", () => {
   it("applies new files in name order, each in its own transaction", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "rea-web-mig-"));
     try {
-      await writeFile(path.join(dir, "0002_b.sql"), "CREATE TABLE mig_b (id int);");
+      await writeFile(
+        path.join(dir, "0002_b.sql"),
+        "CREATE TABLE mig_b (id int);",
+      );
       await writeFile(path.join(dir, "0001_initial.sql"), "SELECT 1;");
-      await writeFile(path.join(dir, "0003_bad.sql"), "CREATE TABLE mig_c (id int); SELECT nope();");
+      await writeFile(
+        path.join(dir, "0003_bad.sql"),
+        "CREATE TABLE mig_c (id int); SELECT nope();",
+      );
       await writeFile(path.join(dir, "notes.txt"), "ignored");
 
       await expect(runMigrations(t.db, { directory: dir })).rejects.toThrow();
@@ -52,7 +65,10 @@ describeDb("migrations", () => {
       const recorded = await t.db.query<{ version: string }>(
         "SELECT version FROM schema_migrations ORDER BY version",
       );
-      expect(recorded.rows.map((r) => r.version)).toEqual(["0001_initial", "0002_b"]);
+      expect(recorded.rows.map((r) => r.version)).toEqual([
+        "0001_initial",
+        "0002_b",
+      ]);
       const created = await t.db.query<{ name: string | null }>(
         "SELECT to_regclass('mig_c') AS name",
       );
