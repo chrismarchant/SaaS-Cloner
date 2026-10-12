@@ -47,6 +47,8 @@ export class FakeControlPlane {
   /** Automatic decision for approval requests (null = wait for test). */
   autoApproval: "approved" | "rejected" | null = null;
   readonly staleRejections: string[] = [];
+  /** Per-investigation timeline: upstream call key -> allocated seq. */
+  readonly timeline = new Map<string, Map<string, number>>();
 
   async start(): Promise<void> {
     this.server = createServer((req, res) => void this.handle(req, res));
@@ -281,8 +283,22 @@ export class FakeControlPlane {
       return this.send(res, 200, { seqs: [] });
     }
     if (action === "tool-calls") {
-      fake.toolCalls.push(body);
-      return this.send(res, 201, {});
+      // Like the real control plane: the investigation timeline seq is
+      // allocated here, idempotently per (upstream_session_id, upstream_seq).
+      const investigation = String(body["investigation_id"]);
+      const key = `${String(body["upstream_session_id"])}#${String(body["upstream_seq"])}`;
+      const calls = (this.timeline.get(investigation) ?? new Map()) as Map<
+        string,
+        number
+      >;
+      this.timeline.set(investigation, calls);
+      let seq = calls.get(key);
+      if (seq === undefined) {
+        seq = calls.size + 1;
+        calls.set(key, seq);
+        fake.toolCalls.push({ ...body, seq });
+      }
+      return this.send(res, 201, { ...body, seq });
     }
     if (action === "findings") {
       fake.findings.push(...(body["findings"] as Record<string, unknown>[]));

@@ -90,9 +90,7 @@ export const runFollowUp = async (
   });
   const findings: NewFinding[] = [];
   if (result.kind === "ran")
-    findings.push(
-      findingFromOutcome(result.outcome, `operator follow-up ${tool}`),
-    );
+    findings.push(findingFromOutcome(result, `operator follow-up ${tool}`));
   else if (result.kind === "unavailable")
     findings.push(
       policyFinding(
@@ -139,7 +137,7 @@ export const runFollowUp = async (
     outcome: result.kind,
     ...(result.kind === "ran"
       ? {
-          seq: result.outcome.seq,
+          seq: result.seq,
           evidence_id: result.outcome.derived.evidence_id,
           is_error: result.outcome.derived.is_error,
         }

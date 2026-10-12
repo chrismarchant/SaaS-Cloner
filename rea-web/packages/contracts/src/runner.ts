@@ -320,7 +320,12 @@ export type CompleteRequest = z.infer<typeof completeRequestSchema>;
 export const toolCallRecordSchema = z.object({
   fencing_token: z.number().int().positive(),
   investigation_id: z.string(),
-  seq: z.number().int().positive(),
+  /**
+   * Call index inside `upstream_session_id`. The investigation timeline `seq`
+   * is allocated by the control plane, which owns the investigation; a second
+   * session (requeued run, comparison) restarts this counter.
+   */
+  upstream_seq: z.number().int().positive(),
   tool_name: z.string(),
   upstream_session_id: z.string(),
   arguments_object_key: z.string().nullable(),

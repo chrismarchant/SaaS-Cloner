@@ -264,7 +264,7 @@ export class InvestigationRun {
         this.noteNonRun(step, result);
         continue;
       }
-      this.findings.push(findingFromOutcome(result.outcome, step.purpose));
+      this.findings.push(findingFromOutcome(result, step.purpose));
       if (step.tool === "open_binary" && !result.outcome.derived.is_error)
         await this.refreshAvailability();
       if (
@@ -309,7 +309,7 @@ export class InvestigationRun {
       return;
     }
     this.findings.push(
-      findingFromOutcome(extracted.outcome, "Extract archive members safely"),
+      findingFromOutcome(extracted, "Extract archive members safely"),
     );
     const sc = extracted.outcome.raw["structuredContent"] as
       | Record<string, unknown>
@@ -331,7 +331,7 @@ export class InvestigationRun {
     if (analysis.kind === "ran")
       this.findings.push(
         findingFromOutcome(
-          analysis.outcome,
+          analysis,
           "Reconstruct the JavaScript application found in the archive",
         ),
       );
@@ -366,7 +366,7 @@ export class InvestigationRun {
         evidence_ids: Array.isArray(u["supporting_evidence_ids"])
           ? (u["supporting_evidence_ids"] as string[])
           : [],
-        tool_call_seqs: [listed.outcome.seq],
+        tool_call_seqs: [listed.seq],
         limitations: [String(u["status"] ?? "open")],
         source: "upstream",
       });
@@ -451,10 +451,7 @@ export class InvestigationRun {
           const result = await this.call(call.name, call.input, "model");
           if (result.kind === "ran") {
             this.findings.push(
-              findingFromOutcome(
-                result.outcome,
-                `model-requested ${call.name}`,
-              ),
+              findingFromOutcome(result, `model-requested ${call.name}`),
             );
             const d = result.outcome.derived;
             const sc = result.outcome.raw["structuredContent"] as
@@ -599,7 +596,7 @@ export class InvestigationRun {
       );
       return null;
     }
-    this.findings.push(...findingsFromLedger(result.outcome));
+    this.findings.push(...findingsFromLedger(result));
     const uploaded = await ctx.client.uploadArtifact(
       ctx.job.id,
       ctx.fencingToken,

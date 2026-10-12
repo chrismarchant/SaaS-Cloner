@@ -176,6 +176,7 @@ export interface ToolCallRecord {
   investigation_id: string;
   job_id: string;
   seq: number;
+  upstream_seq: number;
   tool_name: string;
   upstream_session_id: string;
   arguments_object_key: string | null;

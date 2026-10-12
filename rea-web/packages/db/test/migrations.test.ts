@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -11,8 +11,15 @@ import {
 
 describeDb("migrations", () => {
   let t: TestDatabase;
+  let shipped: string[];
   beforeAll(async () => {
     t = await createTestDatabase({ migrate: false });
+    shipped = (
+      await readdir(path.join(import.meta.dirname, "..", "migrations"))
+    )
+      .filter((name) => name.endsWith(".sql"))
+      .map((name) => name.slice(0, -".sql".length))
+      .sort();
   });
   afterAll(async () => {
     await t.drop();
@@ -27,15 +34,19 @@ describeDb("migrations", () => {
       runMigrations(b),
     ]);
 
-    const applied = [...first.applied, ...second.applied];
-    expect(applied).toEqual(["0001_initial"]);
-    const alreadyApplied = [...first.alreadyApplied, ...second.alreadyApplied];
-    expect(alreadyApplied).toEqual(["0001_initial"]);
+    // Each migration is applied by exactly one pool and skipped by the other.
+    const applied = [...first.applied, ...second.applied].sort();
+    expect(applied).toEqual(shipped);
+    const alreadyApplied = [
+      ...first.alreadyApplied,
+      ...second.alreadyApplied,
+    ].sort();
+    expect(alreadyApplied).toEqual(shipped);
 
     const versions = await t.db.query<{ version: string }>(
       "SELECT version FROM schema_migrations ORDER BY version",
     );
-    expect(versions.rows.map((r) => r.version)).toEqual(["0001_initial"]);
+    expect(versions.rows.map((r) => r.version)).toEqual(shipped);
     const tables = await t.db.query<{ n: number }>(
       "SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'jobs'",
     );
@@ -43,7 +54,7 @@ describeDb("migrations", () => {
 
     const again = await runMigrations(t.db);
     expect(again.applied).toEqual([]);
-    expect(again.alreadyApplied).toEqual(["0001_initial"]);
+    expect(again.alreadyApplied).toEqual(shipped);
   });
 
   it("applies new files in name order, each in its own transaction", async () => {
@@ -65,10 +76,9 @@ describeDb("migrations", () => {
       const recorded = await t.db.query<{ version: string }>(
         "SELECT version FROM schema_migrations ORDER BY version",
       );
-      expect(recorded.rows.map((r) => r.version)).toEqual([
-        "0001_initial",
-        "0002_b",
-      ]);
+      expect(recorded.rows.map((r) => r.version)).toEqual(
+        [...shipped, "0002_b"].sort(),
+      );
       const created = await t.db.query<{ name: string | null }>(
         "SELECT to_regclass('mig_c') AS name",
       );

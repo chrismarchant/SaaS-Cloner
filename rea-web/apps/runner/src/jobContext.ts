@@ -13,6 +13,14 @@ import { ControlPlaneError } from "./controlPlane.js";
 import type { ActiveLease } from "./leases.js";
 import type { UsageTracker } from "./budget.js";
 
+/** An upstream call as recorded on the investigation timeline. */
+export interface RecordedCall {
+  readonly outcome: ToolCallOutcome;
+  /** Investigation timeline seq allocated by the control plane. */
+  readonly seq: number;
+  readonly rawObjectKey: string;
+}
+
 export type Logger = (
   level: "debug" | "info" | "warn" | "error",
   message: string,
@@ -92,12 +100,14 @@ export class JobContext {
 
   /**
    * Upload the complete raw upstream result (unmodified JSON) and record the
-   * tool call with its derived summary. Returns the stored object key.
+   * tool call with its derived summary. Returns the investigation timeline
+   * seq the control plane allocated; findings cite that seq, never the
+   * session-local `outcome.seq`.
    */
   async recordOutcome(
     investigationId: string,
     outcome: ToolCallOutcome,
-  ): Promise<string> {
+  ): Promise<RecordedCall> {
     const raw = JSON.stringify(outcome.raw);
     const sha256 = createHash("sha256").update(raw).digest("hex");
     const uploaded = await this.client.uploadArtifact(
@@ -105,17 +115,16 @@ export class JobContext {
       this.fencingToken,
       {
         kind: "raw_result",
-        name: `${outcome.seq}-${outcome.tool}.json`,
-        toolCallSeq: outcome.seq,
+        name: `${outcome.session_id}-${outcome.seq}-${outcome.tool}.json`,
         investigationId,
       },
       { body: raw },
     );
     this.usage.addArtifactBytes(uploaded.size);
-    await this.client.recordToolCall(this.job.id, {
+    const { seq } = await this.client.recordToolCall(this.job.id, {
       fencing_token: this.fencingToken,
       investigation_id: investigationId,
-      seq: outcome.seq,
+      upstream_seq: outcome.seq,
       tool_name: outcome.tool,
       upstream_session_id: outcome.session_id,
       arguments_object_key: null,
@@ -133,13 +142,14 @@ export class JobContext {
       started_at: outcome.started_at,
     });
     await this.emit("job.tool_call", {
-      seq: outcome.seq,
+      seq,
+      upstream_seq: outcome.seq,
       tool: outcome.tool,
       is_error: outcome.derived.is_error,
       evidence_id: outcome.derived.evidence_id,
       duration_ms: outcome.duration_ms,
     });
-    return uploaded.object_key;
+    return { outcome, seq, rawObjectKey: uploaded.object_key };
   }
 
   /**

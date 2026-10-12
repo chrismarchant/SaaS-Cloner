@@ -212,16 +212,20 @@ describeDb("job support and domain record repositories", () => {
       (await repos.investigations.list(project.id, { status: "failed" })).items,
     ).toHaveLength(0);
 
-    const call = (seq: number, extra: object = {}) => ({
+    const call = (
+      upstreamSeq: number,
+      extra: object = {},
+      session = "sess-a",
+    ) => ({
       investigation_id: inv.id,
       job_id: job.id,
-      seq,
+      upstream_seq: upstreamSeq,
       tool_name: "open_binary",
-      upstream_session_id: "sess",
-      raw_result_object_key: `raw/${seq}.json`,
+      upstream_session_id: session,
+      raw_result_object_key: `raw/${session}-${upstreamSeq}.json`,
       raw_result_sha256: "ab".repeat(32),
       raw_result_bytes: 1234,
-      evidence_id: `ev-${seq}`,
+      evidence_id: `ev-${session}-${upstreamSeq}`,
       effects: ["idempotent"],
       duration_ms: 12,
       started_at: new Date(),
@@ -232,19 +236,30 @@ describeDb("job support and domain record repositories", () => {
     );
     expect(first).toMatchObject({
       seq: 1,
+      upstream_seq: 1,
       raw_result_bytes: 1234,
       is_error: false,
       effects: ["idempotent"],
       derived: { keys: ["a"] },
     });
-    // A retried upload of the same seq returns the stored row.
+    // A retried record of the same upstream call returns the stored row.
     const retry = await repos.toolCalls.create(
       call(1, { tool_name: "different" }),
     );
     expect(retry.id).toBe(first.id);
     expect(retry.tool_name).toBe("open_binary");
     await repos.toolCalls.create(call(2));
-    await repos.toolCalls.create(call(3, { is_error: true }));
+    // A second REA session on the same investigation (requeued run,
+    // comparison) restarts its counter; its calls get the next timeline seq
+    // instead of colliding with the first session's.
+    const otherSession = await repos.toolCalls.create(
+      call(1, { is_error: true }, "sess-b"),
+    );
+    expect(otherSession).toMatchObject({
+      seq: 3,
+      upstream_seq: 1,
+      upstream_session_id: "sess-b",
+    });
     expect(
       (await repos.toolCalls.listByInvestigation(inv.id)).map((c) => c.seq),
     ).toEqual([1, 2, 3]);
@@ -257,9 +272,17 @@ describeDb("job support and domain record repositories", () => {
       ).map((c) => c.seq),
     ).toEqual([2]);
     expect((await repos.toolCalls.findBySeq(inv.id, 3))?.is_error).toBe(true);
-    expect((await repos.toolCalls.findByEvidenceId(inv.id, "ev-2"))?.seq).toBe(
-      2,
+    expect(
+      (await repos.toolCalls.findByEvidenceId(inv.id, "ev-sess-a-2"))?.seq,
+    ).toBe(2);
+    // Concurrent sessions never share a timeline seq.
+    const concurrent = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        repos.toolCalls.create(call(10 + i, {}, i % 2 ? "sess-c" : "sess-d")),
+      ),
     );
+    expect(new Set(concurrent.map((c) => c.seq)).size).toBe(8);
+    expect(Math.max(...concurrent.map((c) => c.seq))).toBe(11);
     expect((await repos.toolCalls.findById(first.id))?.seq).toBe(1);
 
     const artifact = await repos.evidenceArtifacts.create({

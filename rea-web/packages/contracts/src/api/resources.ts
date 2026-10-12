@@ -278,6 +278,7 @@ export const toolCallSummarySchema = z.object({
   seq: z.number().int().positive(),
   tool_name: z.string(),
   upstream_session_id: z.string(),
+  upstream_seq: z.number().int().positive(),
   evidence_id: z.string().nullable(),
   effects: z.array(z.string()),
   is_error: z.boolean(),
@@ -297,6 +298,27 @@ export const evidenceArtifactSchema = z.object({
   size: z.number().int().nonnegative(),
   created_at: timestampSchema,
 });
+
+/**
+ * Runner job input `investigation-<id>`: everything a comparison or export
+ * reads about one investigation of the job's project. Raw results stay out of
+ * line (`raw-<investigation id>-<seq>`), as do evidence artifact bodies
+ * (`artifact-<id>`).
+ */
+export const investigationIndexSchema = z.object({
+  investigation: investigationSchema,
+  findings: z.array(findingSchema),
+  tool_calls: z.array(
+    toolCallSummarySchema.extend({
+      /** Stored call arguments, or null when none were stored. */
+      arguments: z.unknown().nullable(),
+      /** Whether the raw result object is present in storage. */
+      has_raw: z.boolean(),
+    }),
+  ),
+  artifacts: z.array(evidenceArtifactSchema),
+});
+export type InvestigationIndex = z.infer<typeof investigationIndexSchema>;
 
 export const followUpRequestSchema = z.object({
   tool: z.string().min(1),

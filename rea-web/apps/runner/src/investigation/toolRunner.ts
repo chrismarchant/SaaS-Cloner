@@ -3,15 +3,18 @@ import {
   ToolArgumentsRejectedError,
   UnknownToolError,
   type ReaSession,
-  type ToolCallOutcome,
 } from "@rea-web/rea-adapter";
 import type { ExecutionPolicy } from "@rea-web/contracts";
-import { ApprovalRejectedError, type JobContext } from "../jobContext.js";
+import {
+  ApprovalRejectedError,
+  type JobContext,
+  type RecordedCall,
+} from "../jobContext.js";
 import type { AvailabilityView } from "./availability.js";
 import { evaluatePolicy } from "./policy.js";
 
 export type GuardedCall =
-  | { readonly kind: "ran"; readonly outcome: ToolCallOutcome }
+  | ({ readonly kind: "ran" } & RecordedCall)
   | {
       readonly kind: "unavailable";
       readonly reason: string;
@@ -80,8 +83,8 @@ export const guardedCall = async (input: {
         });
       },
     });
-    await ctx.recordOutcome(input.investigationId, outcome);
-    return { kind: "ran", outcome };
+    const recorded = await ctx.recordOutcome(input.investigationId, outcome);
+    return { kind: "ran", ...recorded };
   } catch (error) {
     if (
       error instanceof ToolArgumentsRejectedError ||

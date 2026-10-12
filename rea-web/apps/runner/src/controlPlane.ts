@@ -182,8 +182,24 @@ export class ControlPlaneClient {
     return result;
   }
 
-  async recordToolCall(jobId: string, record: ToolCallRecord): Promise<void> {
-    await this.request("POST", `/jobs/${jobId}/tool-calls`, record, (v) => v);
+  /** Returns the investigation timeline seq the control plane allocated. */
+  async recordToolCall(
+    jobId: string,
+    record: ToolCallRecord,
+  ): Promise<{ seq: number }> {
+    const seq = await this.request(
+      "POST",
+      `/jobs/${jobId}/tool-calls`,
+      record,
+      (v) => (v as { seq?: unknown } | null)?.seq,
+    );
+    if (typeof seq !== "number" || !Number.isInteger(seq) || seq < 1)
+      throw new ControlPlaneError(
+        502,
+        "invalid_response",
+        "tool-call record response carries no allocated seq",
+      );
+    return { seq };
   }
 
   async recordFindings(
@@ -212,7 +228,6 @@ export class ControlPlaneClient {
     meta: {
       kind: string;
       name: string;
-      toolCallSeq?: number;
       investigationId?: string;
     },
     source: { path: string } | { body: Uint8Array | string },
@@ -248,9 +263,6 @@ export class ControlPlaneClient {
           "x-fencing-token": String(fencingToken),
           "x-artifact-kind": meta.kind,
           "x-artifact-name": meta.name,
-          ...(meta.toolCallSeq !== undefined
-            ? { "x-tool-call-seq": String(meta.toolCallSeq) }
-            : {}),
           ...(meta.investigationId
             ? { "x-investigation-id": meta.investigationId }
             : {}),
@@ -312,5 +324,40 @@ export class ControlPlaneClient {
       createWriteStream(destination, { flags: "wx", mode: 0o600 }),
     );
     return (await stat(destination)).size;
+  }
+
+  /** Fetch a JSON job input (fenced), refusing bodies above maxBytes. */
+  async fetchInputJson(
+    jobId: string,
+    fencingToken: number,
+    name: string,
+    options: { signal?: AbortSignal; maxBytes?: number } = {},
+  ): Promise<unknown> {
+    const response = await this.fetchImpl(
+      this.url(`/jobs/${jobId}/inputs/${encodeURIComponent(name)}`),
+      {
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          "x-fencing-token": String(fencingToken),
+          accept: "application/json",
+        },
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    );
+    const text = await response.text();
+    if (!response.ok)
+      throw new ControlPlaneError(
+        response.status,
+        "input_unavailable",
+        text.slice(0, 300),
+      );
+    const maxBytes = options.maxBytes ?? 64 * 1024 * 1024;
+    if (Buffer.byteLength(text) > maxBytes)
+      throw new ControlPlaneError(
+        413,
+        "input_too_large",
+        `job input ${name} exceeds ${maxBytes} bytes`,
+      );
+    return JSON.parse(text) as unknown;
   }
 }

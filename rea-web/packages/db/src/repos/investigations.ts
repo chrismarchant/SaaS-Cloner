@@ -1,4 +1,4 @@
-import { uuidv7 } from "@rea-web/contracts";
+import { ApiError, uuidv7 } from "@rea-web/contracts";
 import type pg from "pg";
 import type { Database, Queryable } from "../database.js";
 import {
@@ -135,7 +135,8 @@ export interface CreateToolCallInput {
   id?: string;
   investigation_id: string;
   job_id: string;
-  seq: number;
+  /** Call index inside `upstream_session_id`; the timeline `seq` is allocated here. */
+  upstream_seq: number;
   tool_name: string;
   upstream_session_id: string;
   arguments_object_key?: string | null;
@@ -152,8 +153,10 @@ export interface CreateToolCallInput {
 
 export interface ToolCallsRepository {
   /**
-   * Idempotent per `(investigation_id, seq)`: a retried upload returns the row
-   * stored first rather than failing or duplicating.
+   * Allocates the next investigation `seq`. Idempotent per
+   * `(upstream_session_id, upstream_seq)`: a retried record returns the row
+   * stored first rather than failing, duplicating or dropping a call from
+   * another session.
    */
   create(input: CreateToolCallInput): Promise<ToolCallRecord>;
   findById(id: string): Promise<ToolCallRecord | null>;
@@ -183,39 +186,60 @@ export function toolCallsRepository(db: Database): ToolCallsRepository {
         input.started_at instanceof Date
           ? input.started_at.toISOString()
           : input.started_at;
-      const inserted = await db.query<ToolCallRecord>(
-        `INSERT INTO tool_calls(id, investigation_id, job_id, seq, tool_name,
-           upstream_session_id, arguments_object_key, raw_result_object_key,
-           raw_result_sha256, raw_result_bytes, derived, evidence_id, effects,
-           is_error, duration_ms, started_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13::jsonb,$14,$15,$16)
-         ON CONFLICT (investigation_id, seq) DO NOTHING RETURNING *`,
-        [
-          input.id ?? uuidv7(),
-          input.investigation_id,
-          input.job_id,
-          input.seq,
-          input.tool_name,
-          input.upstream_session_id,
-          input.arguments_object_key ?? null,
-          input.raw_result_object_key,
-          input.raw_result_sha256,
-          input.raw_result_bytes,
-          json(input.derived ?? {}),
-          input.evidence_id ?? null,
-          json(input.effects ?? []),
-          input.is_error ?? false,
-          input.duration_ms,
-          startedAt,
-        ],
-      );
-      return (
-        firstRow(inserted.rows) ??
-        ((await one(
-          "SELECT * FROM tool_calls WHERE investigation_id = $1 AND seq = $2",
-          [input.investigation_id, input.seq],
-        )) as ToolCallRecord)
-      );
+      return db.withTransaction(async (client) => {
+        // Serialise seq allocation per investigation on its row lock.
+        await client.query(
+          "SELECT 1 FROM investigations WHERE id = $1 FOR UPDATE",
+          [input.investigation_id],
+        );
+        const existing = await client.query<ToolCallRecord>(
+          `SELECT * FROM tool_calls
+           WHERE upstream_session_id = $1 AND upstream_seq = $2`,
+          [input.upstream_session_id, input.upstream_seq],
+        );
+        const stored = firstRow(existing.rows);
+        if (stored) {
+          if (stored.investigation_id !== input.investigation_id)
+            throw new ApiError(
+              "conflict",
+              "Tool call is already recorded for another investigation",
+              {
+                upstream_session_id: input.upstream_session_id,
+                upstream_seq: input.upstream_seq,
+              },
+            );
+          return stored;
+        }
+        const inserted = await client.query<ToolCallRecord>(
+          `INSERT INTO tool_calls(id, investigation_id, job_id, seq, upstream_seq,
+             tool_name, upstream_session_id, arguments_object_key,
+             raw_result_object_key, raw_result_sha256, raw_result_bytes, derived,
+             evidence_id, effects, is_error, duration_ms, started_at)
+           SELECT $1,$2,$3, COALESCE(MAX(seq), 0) + 1, $4,$5,$6,$7,$8,$9,$10,
+             $11::jsonb,$12,$13::jsonb,$14,$15,$16
+           FROM tool_calls WHERE investigation_id = $2
+           RETURNING *`,
+          [
+            input.id ?? uuidv7(),
+            input.investigation_id,
+            input.job_id,
+            input.upstream_seq,
+            input.tool_name,
+            input.upstream_session_id,
+            input.arguments_object_key ?? null,
+            input.raw_result_object_key,
+            input.raw_result_sha256,
+            input.raw_result_bytes,
+            json(input.derived ?? {}),
+            input.evidence_id ?? null,
+            json(input.effects ?? []),
+            input.is_error ?? false,
+            input.duration_ms,
+            startedAt,
+          ],
+        );
+        return firstRow(inserted.rows) as ToolCallRecord;
+      });
     },
     findById: (id) => one("SELECT * FROM tool_calls WHERE id = $1", [id]),
     findBySeq: (investigation_id, seq) =>

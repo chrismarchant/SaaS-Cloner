@@ -1,5 +1,6 @@
 import type { Finding } from "@rea-web/contracts";
 import type { ToolCallOutcome } from "@rea-web/rea-adapter";
+import type { RecordedCall } from "../jobContext.js";
 
 export type NewFinding = Omit<
   Finding,
@@ -50,7 +51,7 @@ const normalizedOf = (outcome: ToolCallOutcome): unknown => {
  * Evidence is an inference. Errors become unknowns with the upstream code.
  */
 export const findingFromOutcome = (
-  outcome: ToolCallOutcome,
+  { outcome, seq }: RecordedCall,
   purpose: string,
 ): NewFinding => {
   const d = outcome.derived;
@@ -60,7 +61,7 @@ export const findingFromOutcome = (
       title: `${outcome.tool} did not complete (${d.error?.code ?? "error"})`,
       body: `${purpose}.\n\nUpstream error: ${d.error?.message ?? "no message"}${d.error?.details_keys.length ? `\nDetails fields: ${d.error.details_keys.join(", ")}` : ""}`,
       evidence_ids: [],
-      tool_call_seqs: [outcome.seq],
+      tool_call_seqs: [seq],
       limitations: [...d.limitations],
       source: "upstream",
     };
@@ -78,7 +79,7 @@ export const findingFromOutcome = (
     title: `${outcome.tool}: ${purpose}`,
     body: `${qualifiers.join(" · ")}\n\n${summariseNormalized(normalizedOf(outcome))}`,
     evidence_ids: d.evidence_id ? [d.evidence_id] : [],
-    tool_call_seqs: [outcome.seq],
+    tool_call_seqs: [seq],
     limitations: [...d.limitations],
     source: "upstream",
   };
@@ -133,7 +134,10 @@ export const budgetFinding = (tool: string): NewFinding => ({
 });
 
 /** Obligations from build_reconstruction_obligation_ledger become proposals. */
-export const findingsFromLedger = (outcome: ToolCallOutcome): NewFinding[] => {
+export const findingsFromLedger = ({
+  outcome,
+  seq,
+}: RecordedCall): NewFinding[] => {
   const normalized = normalizedOf(outcome) as Record<string, unknown> | null;
   const obligations = (normalized?.["obligations"] ?? normalized?.["items"]) as
     | Record<string, unknown>[]
@@ -147,7 +151,7 @@ export const findingsFromLedger = (outcome: ToolCallOutcome): NewFinding[] => {
         evidence_ids: outcome.derived.evidence_id
           ? [outcome.derived.evidence_id]
           : [],
-        tool_call_seqs: [outcome.seq],
+        tool_call_seqs: [seq],
         limitations: [...outcome.derived.limitations],
         source: "upstream",
       },
@@ -162,7 +166,7 @@ export const findingsFromLedger = (outcome: ToolCallOutcome): NewFinding[] => {
         ? o["evidence_ids"]
         : []) as string[]),
     ],
-    tool_call_seqs: [outcome.seq],
+    tool_call_seqs: [seq],
     limitations: [String(o["status"] ?? "status unknown")],
     source: "upstream" as const,
   }));
