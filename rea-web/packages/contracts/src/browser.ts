@@ -11,5 +11,7 @@ export * from "./redaction.js";
 export * from "./api/resources.js";
 export * from "./api/openapi.js";
 export * from "./recovery/manifest.js";
+export * from "./recovery/report.js";
+export * from "./recovery/vocabulary.js";
 export * from "./routing.js";
 export * from "./api/routes.js";

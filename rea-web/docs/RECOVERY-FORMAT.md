@@ -64,8 +64,22 @@ licenses/                     third-party notices for anything redistributed in 
 ```
 
 Restore `run` values are argument arrays, never shell strings. `{{target}}`,
-`{{database_url}}`, `{{assets_root}}` are the only template placeholders and are
-supplied by the restorer.
+`{{database_url}}`, `{{assets_root}}` and `{{package_root}}` are the only
+template placeholders and are supplied by the restorer. A step may not start a
+shell interpreter (matched by program basename) or a launcher that runs
+another program (`env`, `xargs`, `timeout`, …), and its `cwd` must lie under
+`{{target}}`, `{{package_root}}` or `{{assets_root}}`.
+
+Each step declares the outbound network it needs: `none`, `database` (only the
+disposable database the restorer supplies), `registry` (package registries) or
+`unknown`. The restorer denies all other outbound network where the host
+allows it (a Linux network namespace) and records in its report whether
+isolation was enforced. The password of `{{database_url}}` is passed to child
+processes through `PGPASSWORD`, never on the command line.
+
+Verifier reports (`rea-web-recovery-report`, schema in
+`packages/contracts/src/recovery/report.ts`) are written outside the package:
+a finalized package is immutable.
 
 ## Verification status vocabulary
 
@@ -78,6 +92,7 @@ supplied by the restorer.
 | `behavior_verified`     | Named critical behaviour checks (HTTP probes, CLI invocations, screenshot comparisons) passed.              |
 | `partial`               | Some scopes passed, some did not; details per scope.                                                        |
 | `blocked`               | A scope could not run (missing prerequisite, network required but denied, unsupported host).                |
+| `failed`                | A scope ran and its checks did not pass (a step exited non-zero, an invariant did not hold).                |
 
 No percentage is ever derived from these statuses. The verifier reports
 `network_required.verdict` from observed restore steps: `no` only when every

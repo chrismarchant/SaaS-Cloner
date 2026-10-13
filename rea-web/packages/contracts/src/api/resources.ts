@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  verificationScopeSchema,
+  verificationStatusSchema,
+} from "../recovery/vocabulary.js";
+import {
   DEFAULT_APPROVAL_EFFECTS,
   jobBudgetSchema,
   jobKindSchema,
@@ -581,24 +585,6 @@ export const captureSchema = z.object({
   started_at: timestampSchema.nullable(),
   finished_at: timestampSchema.nullable(),
 });
-
-export const VERIFICATION_SCOPES = [
-  "integrity",
-  "clean_build",
-  "data_restore",
-  "behavior",
-] as const;
-export const verificationScopeSchema = z.enum(VERIFICATION_SCOPES);
-export const VERIFICATION_STATUSES = [
-  "captured",
-  "integrity_verified",
-  "clean_build_verified",
-  "data_restore_verified",
-  "behavior_verified",
-  "partial",
-  "blocked",
-] as const;
-export const verificationStatusSchema = z.enum(VERIFICATION_STATUSES);
 
 export const createVerificationRequestSchema = z.object({
   scope: z.array(verificationScopeSchema).min(1),

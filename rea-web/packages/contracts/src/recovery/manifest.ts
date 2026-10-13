@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  verificationScopeSchema,
+  verificationStatusSchema,
+} from "./vocabulary.js";
 
 export const RECOVERY_FORMAT = "rea-web-recovery" as const;
 export const RECOVERY_FORMAT_VERSION = 1 as const;
@@ -21,8 +25,13 @@ export const restoreStepSchema = z.object({
   cwd: z.string().optional(),
   env_names: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/u)).default([]),
   requires: z.array(z.string()).default([]),
-  network: z.enum(["none", "registry", "unknown"]).default("none"),
-  scope: z.enum(["integrity", "clean_build", "data_restore", "behavior"]),
+  /**
+   * Outbound network the step needs: `none`; `database` (only the disposable
+   * database the restorer supplies); `registry` (package registries);
+   * `unknown`. The restorer denies everything else where it can.
+   */
+  network: z.enum(["none", "database", "registry", "unknown"]).default("none"),
+  scope: verificationScopeSchema,
 });
 
 export const omissionSchema = z.object({
@@ -154,21 +163,11 @@ export const recoveryManifestSchema = z.object({
     gaps: z.array(z.string()),
   }),
   verification: z.object({
-    scope: z.array(
-      z.enum(["integrity", "clean_build", "data_restore", "behavior"]),
-    ),
+    scope: z.array(verificationScopeSchema),
     results: z.array(
       z.object({
-        scope: z.enum(["integrity", "clean_build", "data_restore", "behavior"]),
-        status: z.enum([
-          "captured",
-          "integrity_verified",
-          "clean_build_verified",
-          "data_restore_verified",
-          "behavior_verified",
-          "partial",
-          "blocked",
-        ]),
+        scope: verificationScopeSchema,
+        status: verificationStatusSchema,
         detail: z.string(),
         performed_at: timestamp,
         evidence_path: z.string().optional(),
@@ -228,33 +227,79 @@ export const RESTORE_PLACEHOLDERS = [
   "{{package_root}}",
 ] as const;
 
+/** Interpreters that would turn an argument array back into a shell string. */
+const SHELL_INTERPRETERS = new Set([
+  "sh",
+  "bash",
+  "dash",
+  "zsh",
+  "ksh",
+  "csh",
+  "tcsh",
+  "fish",
+  "busybox",
+  "cmd",
+  "cmd.exe",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+]);
+/** Launchers whose next argument is another program to execute. */
+const LAUNCHERS = new Set([
+  "env",
+  "nohup",
+  "nice",
+  "timeout",
+  "xargs",
+  "sudo",
+  "doas",
+]);
+
+const basename = (program: string): string =>
+  program.split(/[\\/]/u).pop()?.toLowerCase() ?? program;
+
+const placeholdersIn = (value: string): string[] =>
+  value.match(/\{\{[^}]*\}\}/gu) ?? [];
+
+/**
+ * Restore steps are argument arrays executed without a shell. Reject
+ * unknown placeholders, shell interpreters (by basename, so `/bin/sh` and
+ * `dash` count), launchers that would hide another program, and working
+ * directories outside `{{target}}`, `{{package_root}}` or `{{assets_root}}`.
+ */
 export const validateRestoreStepArguments = (
   step: RestoreStep,
 ): { ok: true } | { ok: false; reason: string } => {
-  for (const argument of step.run) {
-    const placeholders = argument.match(/\{\{[^}]*\}\}/gu) ?? [];
-    for (const p of placeholders) {
+  for (const value of [...step.run, ...(step.cwd ? [step.cwd] : [])])
+    for (const p of placeholdersIn(value))
       if (!(RESTORE_PLACEHOLDERS as readonly string[]).includes(p))
         return {
           ok: false,
           reason: `unknown placeholder ${p} in step ${step.id}`,
         };
-    }
-    if (
-      /[;&|`$<>]/u.test(argument.replace(/\{\{[^}]*\}\}/gu, "")) &&
-      step.run[0] !== "sh"
-    )
-      continue;
-  }
-  if (
-    step.run[0] === "sh" ||
-    step.run[0] === "bash" ||
-    step.run[0] === "cmd" ||
-    step.run[0] === "powershell"
-  )
+  const program = basename(step.run[0] ?? "");
+  if (SHELL_INTERPRETERS.has(program))
     return {
       ok: false,
-      reason: `shell interpreter not permitted in step ${step.id}`,
+      reason: `shell interpreter ${program} not permitted in step ${step.id}`,
     };
+  if (LAUNCHERS.has(program))
+    return {
+      ok: false,
+      reason: `launcher ${program} not permitted in step ${step.id}; name the program directly`,
+    };
+  if (step.cwd !== undefined) {
+    const root = ["{{target}}", "{{package_root}}", "{{assets_root}}"].find(
+      (r) => step.cwd === r || step.cwd?.startsWith(`${r}/`),
+    );
+    if (root === undefined)
+      return {
+        ok: false,
+        reason: `cwd of step ${step.id} must start with {{target}}, {{package_root}} or {{assets_root}}`,
+      };
+    if (step.cwd.split("/").some((segment) => segment === ".."))
+      return { ok: false, reason: `cwd of step ${step.id} contains ".."` };
+  }
   return { ok: true };
 };

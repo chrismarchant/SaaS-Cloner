@@ -187,4 +187,33 @@ describe("validateRestoreStepArguments", () => {
       validateRestoreStepArguments(step(["cp", "{{home}}/x", "y"])).ok,
     ).toBe(false);
   });
+  it("detects shells by basename and refuses launchers that hide a program", () => {
+    for (const run of [
+      ["/bin/sh", "-c", "x"],
+      ["/usr/bin/dash", "x"],
+      ["C:\\Windows\\System32\\cmd.exe", "/c", "x"],
+      ["pwsh", "-c", "x"],
+      ["env", "sh", "-c", "x"],
+      ["xargs", "rm"],
+    ])
+      expect(validateRestoreStepArguments(step(run)).ok, run.join(" ")).toBe(
+        false,
+      );
+    // Shell metacharacters are inert in an argument array.
+    expect(
+      validateRestoreStepArguments(step(["git", "commit", "-m", "a; b | c"]))
+        .ok,
+    ).toBe(true);
+  });
+  it("confines the working directory to restorer-supplied roots", () => {
+    const withCwd = (cwd: string) => ({ ...step(["npm", "ci"]), cwd });
+    expect(validateRestoreStepArguments(withCwd("{{target}}/app")).ok).toBe(
+      true,
+    );
+    expect(validateRestoreStepArguments(withCwd("{{package_root}}")).ok).toBe(
+      true,
+    );
+    for (const cwd of ["/etc", "{{target}}/../..", "app", "{{targets}}/x"])
+      expect(validateRestoreStepArguments(withCwd(cwd)).ok, cwd).toBe(false);
+  });
 });
