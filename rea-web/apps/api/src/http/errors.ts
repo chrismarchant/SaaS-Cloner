@@ -109,7 +109,15 @@ export const sendError = (
     .send(errorBody(normalised, requestId));
 };
 
-export const registerErrorHandling = (app: FastifyInstance): void => {
+/**
+ * Sole owner of the error and not-found handlers (Fastify allows one
+ * not-found handler per prefix). With `spaFallback`, non-API GET/HEAD
+ * requests serve the web UI's index.html (requires @fastify/static).
+ */
+export const registerErrorHandling = (
+  app: FastifyInstance,
+  options: { spaFallback?: boolean } = {},
+): void => {
   app.setErrorHandler((error: FastifyError | Error, request, reply) => {
     const normalised = normaliseError(error);
     if (normalised.code === "internal") {
@@ -119,7 +127,20 @@ export const registerErrorHandling = (app: FastifyInstance): void => {
     }
     sendError(reply, error, request.id);
   });
-  app.setNotFoundHandler((request, reply) => {
-    sendError(reply, new ApiError("not_found", "Route not found"), request.id);
+  app.setNotFoundHandler(async (request, reply) => {
+    const apiPath =
+      request.url.startsWith("/api/") ||
+      request.url.startsWith("/openapi.json");
+    if (
+      options.spaFallback === true &&
+      (request.method === "GET" || request.method === "HEAD") &&
+      !apiPath
+    )
+      return reply.sendFile("index.html");
+    return sendError(
+      reply,
+      new ApiError("not_found", "Route not found"),
+      request.id,
+    );
   });
 };

@@ -105,7 +105,7 @@ export async function createApp(deps: AppDeps): Promise<FastifyInstance> {
       ctx.config.corsOrigins.length > 0 ? [...ctx.config.corsOrigins] : false,
     credentials: true,
   });
-  registerErrorHandling(app);
+  registerErrorHandling(app, { spaFallback: ctx.config.staticDir !== null });
 
   const openApi = buildApiDocument(ctx.config.version);
   app.get("/openapi.json", async () => openApi);
@@ -136,19 +136,6 @@ export async function createApp(deps: AppDeps): Promise<FastifyInstance> {
       root: ctx.config.staticDir,
       wildcard: false,
       index: ["index.html"],
-    });
-    // SPA fallback for non-API GETs; everything else keeps the JSON 404.
-    app.setNotFoundHandler(async (request, reply) => {
-      const apiPath =
-        request.url.startsWith("/api/") ||
-        request.url.startsWith("/openapi.json");
-      if ((request.method === "GET" || request.method === "HEAD") && !apiPath)
-        return reply.sendFile("index.html");
-      return sendError(
-        reply,
-        new ApiError("not_found", "Route not found"),
-        request.id,
-      );
     });
   }
 
