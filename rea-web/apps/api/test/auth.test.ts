@@ -144,6 +144,34 @@ describeDb("accounts and credentials", () => {
       body: { name: "ok" },
     });
     expect(sameOrigin.status).toBe(201);
+    // Browsers mark cross-site requests even when Origin is absent.
+    const fetchSite = await h.api("POST", "/api/v1/auth/tokens", {
+      auth: account.auth,
+      headers: { "sec-fetch-site": "same-site" },
+      body: { name: "sibling" },
+    });
+    expect(fetchSite.status).toBe(403);
+    const sameSite = await h.api("POST", "/api/v1/auth/tokens", {
+      auth: account.auth,
+      headers: { "sec-fetch-site": "same-origin" },
+      body: { name: "same" },
+    });
+    expect(sameSite.status).toBe(201);
+  });
+
+  it("rejects cross-origin login and registration (login CSRF)", async () => {
+    await h.register("victim-login@example.com");
+    const login = await h.api("POST", "/api/v1/auth/login", {
+      headers: { origin: "https://evil.example" },
+      body: { email: "victim-login@example.com", password: "x".repeat(16) },
+    });
+    expect(login.status).toBe(403);
+    const register = await h.api("POST", "/api/v1/auth/register", {
+      headers: { "sec-fetch-site": "cross-site" },
+      body: { email: "planted@example.com", password: "y".repeat(16) },
+    });
+    expect(register.status).toBe(403);
+    expect(await h.repos.users.findByEmail("planted@example.com")).toBeNull();
   });
 
   it("creates, uses, lists and revokes API tokens (returned once, stored hashed)", async () => {

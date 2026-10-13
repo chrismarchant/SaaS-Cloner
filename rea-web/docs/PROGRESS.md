@@ -8,7 +8,7 @@ Updated at each gate checkpoint. Newest first.
 - **Defects found by integration and fixed at their owners**:
   - Tool-call `seq` was session-local while stored per investigation. Calls from a second session were silently dropped. The control plane now allocates `seq` (migration 0002).
   - The API refused every follow-up after a successful run because it inferred session liveness from job state. Follow-ups now route to the runner that executed the run (`jobs.last_runner_id`, migration 0003); that runner reports `session_closed` itself.
-- **API** (WP03/04, Sonnet; reviewed and integrated): 106 tests against PostgreSQL. Known gap: cookie-authenticated writes rely on `SameSite=Lax` with no `Origin` check. This is to be added with the frontend (WP09).
+- **API** (WP03/04, Sonnet; reviewed and integrated): 106 tests against PostgreSQL. Browser writes, including login and registration, must come from the API's own origin (`Origin`, and `Sec-Fetch-Site` when `Origin` is absent); bearer-token clients are exempt.
 
 ## Checkpoint: G01 in progress, G03 recovery core done — 2026-10-12 23:50 UTC
 

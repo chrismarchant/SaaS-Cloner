@@ -85,11 +85,18 @@ const sessionPrincipal = async (
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
- * Cookie-authenticated mutations must come from our own origin. SameSite=Lax
- * already blocks cross-site POSTs; this closes same-site sibling origins.
+ * Browser mutations must come from our own origin: cookie-authenticated
+ * requests (CSRF) and unauthenticated ones such as login and registration
+ * (login CSRF). SameSite=Lax already blocks cross-site POSTs; this also
+ * closes same-site sibling origins. `Sec-Fetch-Site`, which browsers set and
+ * pages cannot forge, covers requests that omit `Origin`. Bearer-token
+ * clients (API tokens, runners) are not browsers and are exempt.
  */
 const enforceSameOrigin = (ctx: AppContext, request: FastifyRequest): void => {
   if (SAFE_METHODS.has(request.method)) return;
+  const fetchSite = request.headers["sec-fetch-site"];
+  if (fetchSite === "cross-site" || fetchSite === "same-site")
+    throw new ApiError("forbidden", "Cross-origin request rejected");
   const origin = request.headers.origin;
   if (typeof origin !== "string") return;
   const allowed = new Set<string>(ctx.config.corsOrigins);
@@ -147,5 +154,6 @@ export const authenticate = async (
 ): Promise<Principal | null> => {
   if (mode === "user") return authenticateUser(ctx, request);
   if (mode === "runner") return authenticateRunner(ctx, request);
+  if (bearerToken(request) === null) enforceSameOrigin(ctx, request);
   return null;
 };
