@@ -1,5 +1,6 @@
 import {
   ApiError,
+  type JobState,
   routeFor,
   unmetRequirements,
   uuidv7,
@@ -65,6 +66,18 @@ export const viewsFor = async (
   }
   return views;
 };
+
+/** Run-job states in which the executing runner may still hold the session. */
+const SESSION_HOLDING_STATES: ReadonlySet<JobState> = new Set([
+  "running",
+  "awaiting_approval",
+  "succeeded",
+]);
+const NOT_STARTED_STATES: ReadonlySet<JobState> = new Set([
+  "queued",
+  "preparing",
+  "interrupted",
+]);
 
 export const investigationHandlers = (): HandlersFor<
   | "createInvestigation"
@@ -256,25 +269,40 @@ export const investigationHandlers = (): HandlersFor<
       investigation.job_id === null
         ? null
         : await ctx.repos.jobs.findById(investigation.job_id);
-    const lease = runJob?.lease ?? null;
-    if (runJob === null || !ACTIVE_STATES.has(runJob.state) || lease === null)
+    // The runner that executed the run job holds the REA session and keeps it
+    // after the job succeeds (until its idle timeout); it alone knows whether
+    // the session is still live and fails the follow-up with session_closed
+    // if not. A run that failed or was cancelled had its session closed; one
+    // that has not been executed yet has no session.
+    const ownerId =
+      runJob === null
+        ? null
+        : (runJob.lease?.runner_id ?? runJob.last_runner_id);
+    if (
+      runJob === null ||
+      ownerId === null ||
+      !SESSION_HOLDING_STATES.has(runJob.state)
+    )
       throw new ApiError(
         "capability_unavailable",
-        "The investigation's upstream session is closed",
+        "The investigation has no live upstream session",
         {
-          reason: "session_closed",
+          reason:
+            runJob !== null && NOT_STARTED_STATES.has(runJob.state)
+              ? "session_not_started"
+              : "session_closed",
           job_state: runJob?.state ?? null,
-          hint: "Re-run the investigation with a retained evidence bundle import to continue.",
+          hint: "Re-run the investigation to continue from a fresh session.",
         },
       );
-    const owner = await ctx.repos.runners.findById(params.p, lease.runner_id);
+    const owner = await ctx.repos.runners.findById(params.p, ownerId);
     const { report, digest } =
       owner === null ? { report: null, digest: null } : runnerFacts(owner);
     if (owner === null || report === null || digest === null)
       throw new ApiError(
         "capability_unavailable",
         "The owning runner has no capability report",
-        { reason: "runner_unavailable", runner_id: lease.runner_id },
+        { reason: "runner_unavailable", runner_id: ownerId },
       );
     if (!report.tools_list.some((tool) => tool.name === body.tool))
       throw new ApiError(

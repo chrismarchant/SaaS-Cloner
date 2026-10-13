@@ -139,6 +139,7 @@ interface JobRow {
   result: JsonObject | null;
   failure: JobFailure | null;
   preferred_runner_id: string | null;
+  last_runner_id: string | null;
   idempotency_key: string | null;
   cancel_requested_at: string | null;
   created_by: string | null;
@@ -151,8 +152,8 @@ interface JobRow {
 
 const JOB_COLUMNS = `t.id, t.project_id, t.kind, t.state, t.attempt, t.max_attempts,
   t.requirements, t.budget, t.usage, t.input, t.result, t.failure,
-  t.preferred_runner_id, t.idempotency_key, t.cancel_requested_at, t.created_by,
-  t.created_at, t.updated_at,
+  t.preferred_runner_id, t.last_runner_id, t.idempotency_key,
+  t.cancel_requested_at, t.created_by, t.created_at, t.updated_at,
   l.runner_id AS lease_runner_id, l.fencing_token AS lease_fencing_token,
   l.expires_at AS lease_expires_at`;
 const JOB_FROM = "jobs t LEFT JOIN job_leases l ON l.job_id = t.id";
@@ -182,6 +183,7 @@ function toJob(row: JobRow): JobRecord {
     result: row.result,
     failure: row.failure,
     preferred_runner_id: row.preferred_runner_id,
+    last_runner_id: row.last_runner_id,
     idempotency_key: row.idempotency_key,
     cancel_requested_at: row.cancel_requested_at,
     created_by: row.created_by,
@@ -441,8 +443,9 @@ export function jobsRepository(db: Database): JobsRepository {
         [chosen, input.runner_id, fencingToken, ttl],
       );
       await client.query(
-        "UPDATE jobs SET state = 'preparing', updated_at = clock_timestamp() WHERE id = $1",
-        [chosen],
+        `UPDATE jobs SET state = 'preparing', last_runner_id = $2,
+           updated_at = clock_timestamp() WHERE id = $1`,
+        [chosen, input.runner_id],
       );
       const job = await requireJob(client, chosen);
       await appendJobEvent(client, chosen, "job.claimed", {

@@ -430,7 +430,7 @@ describeDb("follow-ups, comparisons and exports", () => {
     expect(queuedRun.status).toBe(409);
     expect(queuedRun.json.error).toMatchObject({
       code: "capability_unavailable",
-      details: { reason: "session_closed" },
+      details: { reason: "session_not_started" },
     });
 
     const claimed = await claimOne(h, runner);
@@ -484,16 +484,44 @@ describeDb("follow-ups, comparisons and exports", () => {
     await transition(h, runner, ok.json.id, followClaim.token, "running");
     await complete(h, runner, ok.json.id, followClaim.token, "succeeded");
 
+    // The runner keeps the session after the run succeeds, so follow-ups are
+    // still routed to it; only the runner knows whether the session is live.
     await complete(h, runner, setup.jobId, claimed.token, "succeeded");
-    const closed = await h.api("POST", url, {
+    const afterSuccess = await h.api("POST", url, {
       auth: owner.auth,
       body: { tool: "binary_session", arguments: {} },
     });
-    expect(closed.status).toBe(409);
-    expect(closed.json.error.details.reason).toBe("session_closed");
-    expect(closed.json.error.details.hint).toContain(
-      "retained evidence bundle",
+    expect(afterSuccess.status).toBe(202);
+    expect(
+      (await h.repos.jobs.findById(afterSuccess.json.id))?.preferred_runner_id,
+    ).toBe(runner.id);
+    await cancelQueuedJobs(h, owner, p);
+
+    // A failed run's session was closed by its runner.
+    const failedRun = await startInvestigation(h, owner, p, {
+      runnerId: runner.id,
+    });
+    const failedClaim = await claimOne(h, runner);
+    expect(failedClaim.jobId).toBe(failedRun.jobId);
+    await transition(h, runner, failedRun.jobId, failedClaim.token, "running");
+    await complete(
+      h,
+      runner,
+      failedRun.jobId,
+      failedClaim.token,
+      "failed",
+      null,
     );
+    const closed = await h.api(
+      "POST",
+      `/api/v1/projects/${p}/investigations/${failedRun.investigationId}/follow-ups`,
+      { auth: owner.auth, body: { tool: "binary_session", arguments: {} } },
+    );
+    expect(closed.status).toBe(409);
+    expect(closed.json.error.details).toMatchObject({
+      reason: "session_closed",
+      job_state: "failed",
+    });
   });
 
   it("creates export and comparison jobs after checking project ownership of every reference", async () => {

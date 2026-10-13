@@ -99,6 +99,8 @@ export interface TargetRecord {
 export interface JobRecord extends Job {
   max_attempts: number;
   preferred_runner_id: string | null;
+  /** Runner that most recently leased the job; kept after completion. */
+  last_runner_id: string | null;
   idempotency_key: string | null;
   created_by: string | null;
 }

@@ -356,6 +356,28 @@ describeDb("jobs", () => {
       expect((await t.repos.jobs.findById(w.job.id))?.state).toBe("queued");
     });
 
+    it("remembers the runner that executed a job after its lease is released", async () => {
+      const { job, runner, token } = await claimed();
+      expect((await t.repos.jobs.findById(job.id))?.last_runner_id).toBe(
+        runner.id,
+      );
+      await t.repos.jobs.transition({
+        job_id: job.id,
+        fencing_token: token,
+        to: "running",
+        actor: "runner",
+      });
+      await t.repos.jobs.complete({
+        job_id: job.id,
+        runner_id: runner.id,
+        fencing_token: token,
+        outcome: "succeeded",
+      });
+      const done = await t.repos.jobs.findById(job.id);
+      expect(done?.lease).toBeNull();
+      expect(done?.last_runner_id).toBe(runner.id);
+    });
+
     it("an expired lease cannot transition or complete even with the right token", async () => {
       const { job, runner, token } = await claimed();
       await expireLease(job.id);

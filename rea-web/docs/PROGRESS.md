@@ -2,6 +2,14 @@
 
 Updated at each gate checkpoint. Newest first.
 
+## Checkpoint: G01 complete — 2026-10-13 00:05 UTC
+
+- **Gate evidence**: `tests/e2e/investigation.test.ts` runs the built API (`apps/api/dist/main.js`) and runner (`apps/runner/dist/main.js`) as separate processes against a fresh PostgreSQL database, a filesystem object store and the built upstream REA MCP server. It covers the register → runner online → upload → routing → investigation → tool calls → findings → evidence bundle → job events → follow-up flow, asserting that both processes' logs contain neither the session secret nor the runner token. Command: `REA_WEB_TEST_DATABASE_URL=… npx vitest run --project e2e` → 1/1 (about 19 s). The model provider is disabled (no approved budget), so the model follow-up loop is recorded as unavailable.
+- **Defects found by integration and fixed at their owners**:
+  - Tool-call `seq` was session-local while stored per investigation. Calls from a second session were silently dropped. The control plane now allocates `seq` (migration 0002).
+  - The API refused every follow-up after a successful run because it inferred session liveness from job state. Follow-ups now route to the runner that executed the run (`jobs.last_runner_id`, migration 0003); that runner reports `session_closed` itself.
+- **API** (WP03/04, Sonnet; reviewed and integrated): 106 tests against PostgreSQL. Known gap: cookie-authenticated writes rely on `SameSite=Lax` with no `Origin` check. This is to be added with the frontend (WP09).
+
 ## Checkpoint: G01 in progress, G03 recovery core done — 2026-10-12 23:50 UTC
 
 - **Branch / SHA**: `claude/zen-lamport-ijxd7w` at `4359ce2b6` (pushed). Upstream baseline unchanged: `git diff --stat upstream-baseline...HEAD -- . ':(exclude)rea-web'` is empty.
