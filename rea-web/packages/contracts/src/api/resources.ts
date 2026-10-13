@@ -672,3 +672,22 @@ export const hasJobResultSchema = (kind: string): kind is JobResultKind =>
 export type JobResult<K extends JobResultKind> = z.infer<
   (typeof jobResultSchemas)[K]
 >;
+
+/** Runner job input `build`: the build definition a preservation job reads. */
+export const buildJobInputSchema = buildSchema
+  .pick({
+    id: true,
+    name: true,
+    description: true,
+    source: true,
+    components: true,
+  })
+  .extend({ project_slug: z.string() });
+export type BuildJobInput = z.infer<typeof buildJobInputSchema>;
+
+/** Runner job input `plan`: the produced plan a capture job follows. */
+export const planJobInputSchema = preservationPlanBodySchema.extend({
+  id: idSchema,
+  build_id: idSchema,
+});
+export type PlanJobInput = z.infer<typeof planJobInputSchema>;

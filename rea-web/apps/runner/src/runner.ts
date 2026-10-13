@@ -23,6 +23,13 @@ import {
 import { runFollowUp, SessionClosedError } from "./investigation/followUp.js";
 import { runComparison } from "./investigation/compare.js";
 import { runExport } from "./investigation/exportInvestigation.js";
+import {
+  runPreservationCapture,
+  runPreservationPlan,
+  SourceRefusedError,
+  type PreservationDeps,
+} from "./preservation/execute.js";
+import { resolveLocalPaths } from "./preservation/localPaths.js";
 
 export interface RunnerDeps {
   readonly config: RunnerConfig;
@@ -32,12 +39,17 @@ export interface RunnerDeps {
   readonly fetchImpl?: typeof fetch;
 }
 
+/** Version recorded as the package producer (rea-web runner). */
+export const RUNNER_VERSION = "0.1.0";
+
 /** Job kinds this runner executes; others are failed with capability_unavailable. */
 export const SUPPORTED_JOB_KINDS = new Set([
   "investigation.run",
   "investigation.follow_up",
   "investigation.compare",
   "investigation.export",
+  "preservation.plan",
+  "preservation.capture",
 ]);
 
 export class Runner {
@@ -50,6 +62,7 @@ export class Runner {
   private readonly claimAbort = new AbortController();
   private readonly redactor: Redactor;
   private reaSourceSha: string | null = null;
+  private reaIdentity: PreservationDeps["upstreamRea"] = null;
 
   constructor(private readonly deps: RunnerDeps) {
     this.client = new ControlPlaneClient(
@@ -84,6 +97,13 @@ export class Runner {
       this.deps.env,
     );
     this.reaSourceSha = reaInfo?.source_sha ?? null;
+    this.reaIdentity = report.rea
+      ? {
+          package_version: report.rea.package_version,
+          source_sha: report.rea.source_sha,
+          catalog_digest: report.rea.catalog.digests["mcp_tools"] ?? null,
+        }
+      : null;
     const registered = await this.client.register(report);
     this.deps.log("info", "runner registered", {
       runner_id: registered.runner_id,
@@ -255,6 +275,20 @@ export class Runner {
           remaining_resource_kinds: [],
           detail: "comparison session closed",
         });
+      } else if (
+        job.kind === "preservation.plan" ||
+        job.kind === "preservation.capture"
+      ) {
+        const deps = this.preservationDeps();
+        const result =
+          job.kind === "preservation.plan"
+            ? await runPreservationPlan(ctx, deps)
+            : await runPreservationCapture(ctx, deps);
+        await this.finish(ctx, "succeeded", result, null, {
+          status: "cleanup_complete",
+          remaining_resource_kinds: [],
+          detail: "staging package and collector workspace removed",
+        });
       } else if (job.kind === "investigation.export") {
         const result = await runExport(ctx, job.input);
         await this.finish(ctx, "succeeded", result, null, {
@@ -287,6 +321,17 @@ export class Runner {
         force: true,
       }).catch(() => undefined);
     }
+  }
+
+  private preservationDeps(): PreservationDeps {
+    return {
+      env: this.deps.env,
+      localPaths: () =>
+        resolveLocalPaths(this.deps.config.localTargetAllowlist),
+      producerVersion: RUNNER_VERSION,
+      upstreamRea: this.reaIdentity,
+      verifierBundlePath: this.deps.config.verifierBundlePath,
+    };
   }
 
   private async handleFailure(
@@ -334,22 +379,28 @@ export class Runner {
             details: { dimension: reason.dimension },
             retryable: false,
           }
-        : error instanceof SessionClosedError
+        : error instanceof SourceRefusedError
           ? {
-              code: "capability_unavailable",
+              code: "unsafe_url",
               message: error.message,
-              details: { reason: "session_closed" },
               retryable: false,
             }
-          : {
-              code: "runner_error",
-              message: this.redactor
-                .redactText(
-                  error instanceof Error ? error.message : String(error),
-                )
-                .slice(0, 2000),
-              retryable: false,
-            };
+          : error instanceof SessionClosedError
+            ? {
+                code: "capability_unavailable",
+                message: error.message,
+                details: { reason: "session_closed" },
+                retryable: false,
+              }
+            : {
+                code: "runner_error",
+                message: this.redactor
+                  .redactText(
+                    error instanceof Error ? error.message : String(error),
+                  )
+                  .slice(0, 2000),
+                retryable: false,
+              };
     await this.finish(ctx, "failed", null, failure, cleanup);
   }
 

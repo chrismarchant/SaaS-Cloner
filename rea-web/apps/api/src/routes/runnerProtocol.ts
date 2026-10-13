@@ -2,6 +2,8 @@ import {
   ApiError,
   type JobEventKind,
   type JobFailure,
+  buildJobInputSchema,
+  planJobInputSchema,
   type JobRequirements,
   RUNNER_PROTOCOL_VERSION,
   digestCapabilities,
@@ -562,13 +564,17 @@ const serveInput = async (
       requireInput(job, "build_id"),
     );
     if (build === null) throw new ApiError("not_found", "Build not found");
-    return json({
-      id: build.id,
-      name: build.name,
-      description: build.description,
-      source: build.source,
-      components: build.components,
-    });
+    const project = await ctx.repos.projects.findById(projectId);
+    return json(
+      buildJobInputSchema.parse({
+        id: build.id,
+        name: build.name,
+        description: build.description,
+        source: build.source,
+        components: build.components,
+        project_slug: project?.slug ?? projectId,
+      }),
+    );
   }
   if (name === "plan") {
     const plan = await ctx.repos.plans.findById(
@@ -577,7 +583,13 @@ const serveInput = async (
     );
     if (plan === null || plan.plan === null)
       throw new ApiError("not_found", "Plan not found");
-    return json({ id: plan.id, build_id: plan.build_id, ...plan.plan });
+    return json(
+      planJobInputSchema.parse({
+        ...plan.plan,
+        id: plan.id,
+        build_id: plan.build_id,
+      }),
+    );
   }
   if (name === "manifest") {
     const capture = await ctx.repos.captures.findById(

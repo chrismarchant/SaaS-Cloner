@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,6 +15,8 @@ export interface RunnerConfig {
   readonly reaRoot: string;
   readonly passthroughNames: readonly string[];
   readonly localTargetAllowlist: readonly string[];
+  /** rea-recover bundle embedded into captured packages, when present. */
+  readonly verifierBundlePath: string | null;
   readonly labels: readonly string[];
   /** Keep an investigation's REA session alive this long after its run for follow-ups. */
   readonly sessionIdleMs: number;
@@ -56,6 +59,23 @@ const resolveApiUrl = (
     return `http://${host}:${port}`;
   }
   throw new Error("REA_WEB_API_URL or REA_WEB_API_PRIVATE_HOST is required");
+};
+
+/**
+ * The self-contained verifier embedded in every captured package. Explicit
+ * REA_WEB_RECOVER_BUNDLE wins; otherwise the built bundle next to the runner
+ * in this checkout is used when it exists.
+ */
+const resolveVerifierBundle = (
+  env: Readonly<Record<string, string | undefined>>,
+): string | null => {
+  const explicit = env["REA_WEB_RECOVER_BUNDLE"];
+  if (explicit) return resolve(explicit);
+  const sibling = resolve(
+    import.meta.dirname,
+    "../../recover-cli/dist/rea-recover.mjs",
+  );
+  return existsSync(sibling) ? sibling : null;
 };
 
 const list = (value: string | undefined, separator: string): string[] =>
@@ -103,6 +123,7 @@ export const parseRunnerConfig = (
       ":",
     ).map((p) => resolve(p)),
     labels: list(env["REA_WEB_RUNNER_LABELS"], ","),
+    verifierBundlePath: resolveVerifierBundle(env),
     sessionIdleMs: Number.isFinite(idle) && idle >= 0 ? idle : 15 * 60_000,
     logLevel: (LOG_LEVELS as readonly string[]).includes(level)
       ? level
