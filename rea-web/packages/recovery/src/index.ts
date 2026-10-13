@@ -49,3 +49,10 @@ export {
   generateRecoveryKey,
   readEncryptionHeader,
 } from "./encryption.js";
+export {
+  type RestoreOptions,
+  type RestoreScope,
+  type VerifyOptions,
+  restorePackage,
+  verifyPackage,
+} from "./verify/index.js";

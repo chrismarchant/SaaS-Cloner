@@ -100,6 +100,12 @@ export interface CaptureOptions {
   } | null;
   /** Maximum span between the data and asset windows for `single_point`. Default 60 000 ms. */
   consistencyWindowMs?: number;
+  /**
+   * Built `rea-recover.mjs` bundle to embed as `recovery/rea-recover.mjs`
+   * (component `package`), so the package carries its own verifier and the
+   * manifest records its hash.
+   */
+  verifierBundlePath?: string;
 }
 
 export const DEFAULT_CONSISTENCY_WINDOW_MS = 60_000;

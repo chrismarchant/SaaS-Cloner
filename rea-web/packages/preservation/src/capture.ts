@@ -108,6 +108,9 @@ async function walkStage(
   return out;
 }
 
+/** Package-relative path of the embedded standalone verifier/restorer. */
+export const EMBEDDED_VERIFIER_PATH = "recovery/rea-recover.mjs";
+
 export async function capturePackage(
   build: BuildDefinition,
   plan: PreservationPlanBody,
@@ -165,6 +168,14 @@ export async function capturePackage(
     });
   if (licenseNotices.length > 0)
     builder.setLicenses(unique(licenseNotices).join("\n\n"));
+
+  if (options.verifierBundlePath !== undefined)
+    await builder.copyFile(
+      PACKAGE_COMPONENT_ID,
+      EMBEDDED_VERIFIER_PATH,
+      options.verifierBundlePath,
+      { mediaType: "text/javascript" },
+    );
 
   const now = (ctx.now ?? (() => new Date()))().toISOString();
   const consistency = applyManifestFacts(builder, results, {

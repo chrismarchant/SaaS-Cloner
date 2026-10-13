@@ -90,3 +90,4 @@ export const restoreReportSchema = z.object({
 export type RestoreReport = z.infer<typeof restoreReportSchema>;
 export type ScopeResult = z.infer<typeof scopeResultSchema>;
 export type RestoreStepResult = z.infer<typeof restoreStepResultSchema>;
+export type InvariantResult = z.infer<typeof invariantResultSchema>;
