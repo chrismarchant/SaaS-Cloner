@@ -1,5 +1,6 @@
 import {
   ApiError,
+  compareJobInputSchema,
   type JobState,
   routeFor,
   unmetRequirements,
@@ -392,14 +393,14 @@ export const investigationHandlers = (): HandlersFor<
         labels: [],
         effects: [],
       },
-      input: {
+      input: compareJobInputSchema.parse({
         investigation_id: leftInvestigation,
         left_investigation_id: leftInvestigation,
         right_investigation_id: rightInvestigation,
         tool: body.tool,
         left: body.left,
         right: body.right,
-      },
+      }),
       preferred_runner_id: preferred,
     });
     return jobSummaryView(job);

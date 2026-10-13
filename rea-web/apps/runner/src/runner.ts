@@ -21,6 +21,8 @@ import {
   parseInvestigationInput,
 } from "./investigation/execute.js";
 import { runFollowUp, SessionClosedError } from "./investigation/followUp.js";
+import { runComparison } from "./investigation/compare.js";
+import { runExport } from "./investigation/exportInvestigation.js";
 
 export interface RunnerDeps {
   readonly config: RunnerConfig;
@@ -34,6 +36,8 @@ export interface RunnerDeps {
 export const SUPPORTED_JOB_KINDS = new Set([
   "investigation.run",
   "investigation.follow_up",
+  "investigation.compare",
+  "investigation.export",
 ]);
 
 export class Runner {
@@ -235,6 +239,27 @@ export class Runner {
           status: "cleanup_complete",
           remaining_resource_kinds: [],
           detail: `REA session ${result.session_id} retained for follow-ups for ${this.deps.config.sessionIdleMs} ms; evidence bundle exported`,
+        });
+      } else if (job.kind === "investigation.compare") {
+        // Runs in its own short-lived session, closed by runComparison.
+        const result = await runComparison(
+          ctx,
+          {
+            sessions: this.sessions,
+            sessionOptions: (workspace) => this.sessionOptions(workspace),
+          },
+          job.input,
+        );
+        await this.finish(ctx, "succeeded", result, null, {
+          status: "cleanup_complete",
+          remaining_resource_kinds: [],
+          detail: "comparison session closed",
+        });
+      } else if (job.kind === "investigation.export") {
+        const result = await runExport(ctx, job.input);
+        await this.finish(ctx, "succeeded", result, null, {
+          status: "cleanup_complete",
+          remaining_resource_kinds: [],
         });
       } else {
         investigationId = String(job.input["investigation_id"] ?? "");

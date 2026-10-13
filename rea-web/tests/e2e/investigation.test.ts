@@ -7,7 +7,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -29,6 +29,8 @@ describeStack("investigate workflow through the built API and runner", () => {
   let scratch = "";
   let zip: Buffer;
   let project = "";
+  let target = "";
+  let firstInvestigation = "";
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), "rea-web-e2e-fixture-"));
@@ -78,7 +80,7 @@ describeStack("investigate workflow through the built API and runner", () => {
     expect(upload.json.sha256).toBe(
       createHash("sha256").update(zip).digest("hex"),
     );
-    const target = upload.json.id as string;
+    target = upload.json.id as string;
     const routing = await stack.request(
       "GET",
       `/projects/${project}/targets/${target}/routing`,
@@ -99,6 +101,7 @@ describeStack("investigate workflow through the built API and runner", () => {
     );
     expect(created.status).toBe(201);
     const investigation = created.json.id as string;
+    firstInvestigation = investigation;
 
     let view: any = null;
     await stack.waitFor(async () => {
@@ -239,5 +242,234 @@ describeStack("investigate workflow through the built API and runner", () => {
     // Secrets configured for either process never reach their logs.
     expect(stack.logs).not.toContain(stack.sessionSecret);
     expect(stack.logs).not.toContain(stack.runnerToken);
+  });
+  const waitForJob = async (jobId: string): Promise<any> => {
+    let job: any = null;
+    await stack.waitFor(async () => {
+      job = (await stack.request("GET", `/projects/${project}/jobs/${jobId}`))
+        .json;
+      return ["succeeded", "failed", "cancelled"].includes(job?.state);
+    }, 300_000);
+    return job;
+  };
+
+  const runInvestigation = async (): Promise<string> => {
+    const created = await stack.request(
+      "POST",
+      `/projects/${project}/investigations`,
+      {
+        body: {
+          target_id: target,
+          question: "Second look at the same build for comparison",
+          policy: { model_follow_up: false },
+        },
+      },
+    );
+    expect(created.status).toBe(201);
+    await stack.waitFor(async () => {
+      const view = await stack.request(
+        "GET",
+        `/projects/${project}/investigations/${created.json.id}`,
+      );
+      return view.json.status === "completed";
+    }, 300_000);
+    return created.json.id as string;
+  };
+
+  const evidenceOf = async (investigation: string, tool: string) => {
+    const calls = await stack.request(
+      "GET",
+      `/projects/${project}/investigations/${investigation}/tool-calls?limit=200`,
+    );
+    const call = calls.json.items.find(
+      (c: { tool_name: string; evidence_id: string | null }) =>
+        c.tool_name === tool && c.evidence_id,
+    );
+    expect(call, `${tool} evidence in ${investigation}`).toBeDefined();
+    return call.evidence_id as string;
+  };
+
+  it("compares stored evidence across two investigations in a fresh session", async () => {
+    expect(firstInvestigation).not.toBe("");
+    const second = await runInvestigation();
+    const left = await evidenceOf(firstInvestigation, "inspect_artifact");
+    const right = await evidenceOf(second, "inspect_artifact");
+
+    const compared = await stack.request(
+      "POST",
+      `/projects/${project}/comparisons`,
+      {
+        body: {
+          tool: "compare_artifacts",
+          left: {
+            kind: "retained-evidence",
+            evidence_id: left,
+            investigation_id: firstInvestigation,
+          },
+          right: {
+            kind: "retained-evidence",
+            evidence_id: right,
+            investigation_id: second,
+          },
+        },
+      },
+    );
+    expect(compared.status).toBe(202);
+    const job = await waitForJob(compared.json.id);
+    expect(job.state, JSON.stringify(job.failure)).toBe("succeeded");
+    expect(job.result).toMatchObject({
+      tool: "compare_artifacts",
+      outcome: "ran",
+      anchor_investigation_id: firstInvestigation,
+      left: { evidence_id: left, investigation_id: firstInvestigation },
+      right: { evidence_id: right, investigation_id: second },
+    });
+    // The comparison is on the anchor's timeline with the next seq, and its
+    // finding cites it.
+    const calls = await stack.request(
+      "GET",
+      `/projects/${project}/investigations/${firstInvestigation}/tool-calls?limit=200`,
+    );
+    const call = calls.json.items.find(
+      (c: { seq: number }) => c.seq === job.result.seq,
+    );
+    expect(call.tool_name).toBe("compare_artifacts");
+    const findings = await stack.request(
+      "GET",
+      `/projects/${project}/investigations/${firstInvestigation}/findings`,
+    );
+    expect(
+      findings.json.items.some((f: { tool_call_seqs: number[] }) =>
+        f.tool_call_seqs.includes(job.result.seq),
+      ),
+    ).toBe(true);
+
+    // Bundle-level comparison of the two investigations' stored bundles.
+    const bundleOf = async (investigation: string) => {
+      const evidence = await stack.request(
+        "GET",
+        `/projects/${project}/investigations/${investigation}/evidence`,
+      );
+      return evidence.json.items.find(
+        (a: { kind: string; name: string }) =>
+          a.kind === "bundle" && a.name.startsWith("evidence-bundle-"),
+      ).id as string;
+    };
+    const bundles = await stack.request(
+      "POST",
+      `/projects/${project}/comparisons`,
+      {
+        body: {
+          tool: "compare_bundles",
+          left: {
+            kind: "artifact",
+            artifact_id: await bundleOf(firstInvestigation),
+          },
+          right: { kind: "artifact", artifact_id: await bundleOf(second) },
+        },
+      },
+    );
+    const bundleJob = await waitForJob(bundles.json.id);
+    expect(bundleJob.state, JSON.stringify(bundleJob.failure)).toBe(
+      "succeeded",
+    );
+    expect(bundleJob.result.outcome).toBe("ran");
+    expect(bundleJob.result.is_error).toBe(false);
+
+    // A record-level tool over multi-record bundles is refused before
+    // dispatch with the reason, not guessed.
+    const refused = await stack.request(
+      "POST",
+      `/projects/${project}/comparisons`,
+      {
+        body: {
+          tool: "compare_artifacts",
+          left: {
+            kind: "artifact",
+            artifact_id: await bundleOf(firstInvestigation),
+          },
+          right: { kind: "artifact", artifact_id: await bundleOf(second) },
+        },
+      },
+    );
+    const refusedJob = await waitForJob(refused.json.id);
+    expect(refusedJob.result.outcome).toBe("invalid_arguments");
+    expect(String(refusedJob.result.reasons)).toContain("compare_bundles");
+  });
+
+  it("exports the investigation as a zip whose index digests every member", async () => {
+    const created = await stack.request(
+      "POST",
+      `/projects/${project}/investigations/${firstInvestigation}/exports`,
+    );
+    expect(created.status).toBe(202);
+    const job = await waitForJob(created.json.id);
+    expect(job.state, JSON.stringify(job.failure)).toBe("succeeded");
+    const download = await fetch(
+      `${stack.apiUrl}/api/v1/projects/${project}/investigations/${firstInvestigation}/evidence/${job.result.export_artifact_id}`,
+      { headers: { cookie: stack.cookie } },
+    );
+    expect(download.status).toBe(200);
+    const bytes = Buffer.from(await download.arrayBuffer());
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      job.result.sha256,
+    );
+    const zipPath = join(scratch, "export.zip");
+    await writeFile(zipPath, bytes);
+    // Independent reader: Python's zipfile verifies every CRC and lists names.
+    const listing = execFileSync(
+      "python3",
+      [
+        "-I",
+        "-c",
+        [
+          "import hashlib, json, sys, zipfile",
+          "z = zipfile.ZipFile(sys.argv[1])",
+          "assert z.testzip() is None",
+          "index = json.loads(z.read('index.json'))",
+          "out = {'names': z.namelist(), 'index': index,",
+          "       'digests': {n: hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist()}}",
+          "print(json.dumps(out))",
+        ].join("\n"),
+        zipPath,
+      ],
+      { encoding: "utf8" },
+    );
+    const { names, index, digests } = JSON.parse(listing);
+    expect(index.format).toBe("rea-web.investigation-export");
+    expect(index.investigation_id).toBe(firstInvestigation);
+    for (const member of index.members)
+      expect(digests[member.path], member.path).toBe(member.sha256);
+    expect(new Set(names)).toEqual(
+      new Set([
+        ...index.members.map((m: { path: string }) => m.path),
+        "index.json",
+      ]),
+    );
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "README.md",
+        "investigation.json",
+        "findings.json",
+        "obligations.json",
+        "tool-calls.json",
+      ]),
+    );
+    const calls = await stack.request(
+      "GET",
+      `/projects/${project}/investigations/${firstInvestigation}/tool-calls?limit=200`,
+    );
+    const raw = names.filter((n: string) => n.startsWith("raw/"));
+    // Every tool call recorded before the export has its raw result inside.
+    expect(raw.length).toBe(calls.json.items.length);
+    for (const call of calls.json.items) {
+      const member = index.members.find(
+        (m: { source: { kind: string; seq?: number } }) =>
+          m.source.kind === "raw_result" && m.source.seq === call.seq,
+      );
+      expect(member.source.stored_sha256).toBe(call.raw_result_sha256);
+      if (!member.redacted) expect(member.sha256).toBe(call.raw_result_sha256);
+    }
+    expect(names.some((n: string) => n.startsWith("evidence/"))).toBe(true);
   });
 });

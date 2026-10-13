@@ -349,6 +349,22 @@ export const comparisonRequestSchema = z.object({
   runner_id: idSchema.optional(),
 });
 
+/**
+ * Input of an `investigation.compare` job, written by the API from a
+ * comparison request: each side's owning investigation is resolved, and the
+ * left side's investigation anchors the comparison's tool calls and findings.
+ */
+export const compareJobInputSchema = z.object({
+  investigation_id: idSchema,
+  left_investigation_id: idSchema,
+  right_investigation_id: idSchema,
+  tool: comparisonRequestSchema.shape.tool,
+  left: evidenceRefSchema,
+  right: evidenceRefSchema,
+  policy: executionPolicySchema.prefault({}),
+});
+export type CompareJobInput = z.infer<typeof compareJobInputSchema>;
+
 export const jobSummarySchema = z.object({
   id: idSchema,
   project_id: idSchema,
