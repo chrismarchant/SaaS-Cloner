@@ -2,6 +2,25 @@
 
 Updated at each gate checkpoint. Newest first.
 
+## Checkpoint: G02 complete — 2026-10-13 01:10 UTC
+
+- **SHA**: `3d4e430a2` (pushed).
+- **Gate evidence**: `tests/e2e/ui.test.ts` (17/17, about 185 s) drives Chromium through the built web UI. The UI is served by the built API from the same origin, with a real runner and upstream REA behind it. The run covers:
+  - registering, creating a runner with its token shown once, and the runner coming online with its capability panel;
+  - uploading the fixture and following the live timeline to completion;
+  - tool calls with the raw result and evidence explorer, and facts in the findings;
+  - an `inspect_analysis_view` follow-up through the schema-generated form with the evidence picker;
+  - approve, reject and cancel;
+  - a comparison across investigations, and a refused comparison showing the producer's reasons;
+  - an export download whose digest matches the API's record, with no CSP violations.
+- **Defect found**: with `REA_WEB_STATIC_DIR` set, the API failed to start because it registered two not-found handlers. One handler now owns the SPA fallback, and a test covers it.
+- **Web unit tests**: 48. The schema form handles every one of the 173 probed tool schemas; unsupported constructs fall back to raw JSON rather than dropping fields.
+- **UI gaps reported**:
+  - `/projects/{p}/tools` lacks per-tool effects, so the form cannot warn that a tool needs approval before submission.
+  - There is no investigation filter on `/jobs`.
+  - The over-2 MiB raw-result path and EventSource reconnection are untested at runtime.
+  - There are no Preserve screens yet; Preserve is API-only.
+
 ## Checkpoint: G03 and G04 complete; G02 UI in progress — 2026-10-13 00:50 UTC
 
 - **Branch / SHA**: `claude/zen-lamport-ijxd7w` at `61032ba8e` (pushed). Upstream unchanged.
