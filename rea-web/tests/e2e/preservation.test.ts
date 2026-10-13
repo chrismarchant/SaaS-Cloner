@@ -72,6 +72,9 @@ describeStack("preserve workflow through the built API and runner", () => {
     );
     stack.startRunner(runner.json.token, {
       REA_WEB_RECOVERY_KEYS_DIR: keysDir,
+      // Restore credentials are separate from the capture credential.
+      REA_WEB_VERIFY_DATABASE_ADMIN_URL: fx.adminDatabaseUrl,
+      REA_WEB_VERIFY_ALLOW_NETWORK: "registry",
       REA_WEB_RUNNER_LOCAL_TARGET_ALLOWLIST: `${fx.repoPath}:${fx.assetsPath}`,
       // The capture credential lives only on the runner, under the declared name.
       [DB_ENV_NAME]: fx.databaseUrl,
@@ -261,6 +264,53 @@ describeStack("preserve workflow through the built API and runner", () => {
     const refused = await waitForJob(missingKey.json.job_id);
     expect(refused.state).toBe("failed");
     expect(refused.failure.message).toContain("not on this runner");
+  });
+
+  it("verifies the stored capture by restoring it into a disposable target and database", async () => {
+    expect(captureId).not.toBe("");
+    const created = await stack.request(
+      "POST",
+      `/projects/${project}/builds/${buildId}/captures/${captureId}/verifications`,
+      {
+        body: {
+          scope: ["integrity", "clean_build", "data_restore", "behavior"],
+        },
+      },
+    );
+    expect(created.status, created.text).toBe(202);
+    const job = await waitForJob(created.json.job_id);
+    expect(job.state, JSON.stringify(job.failure)).toBe("succeeded");
+    const verification = (
+      await stack.request(
+        "GET",
+        `/projects/${project}/builds/${buildId}/captures/${captureId}/verifications/${created.json.id}`,
+      )
+    ).json;
+    expect(
+      Object.fromEntries(
+        verification.results.map((r: { scope: string; status: string }) => [
+          r.scope,
+          r.status,
+        ]),
+      ),
+      JSON.stringify(verification.results),
+    ).toEqual({
+      integrity: "integrity_verified",
+      clean_build: "clean_build_verified",
+      data_restore: "data_restore_verified",
+      behavior: "behavior_verified",
+    });
+    expect(verification.overall).toBe("behavior_verified");
+    // A registry step (npm ci) was needed, so the package is not network-free.
+    expect(verification.network_required.verdict).toBe("yes");
+    for (const text of [
+      JSON.stringify(verification),
+      JSON.stringify(job),
+      stack.logs,
+    ]) {
+      expect(text).not.toContain(fx.databasePassword);
+      expect(text).not.toContain(fx.secretMarker);
+    }
   });
 
   it("refuses a git source that names a path on the runner host", async () => {

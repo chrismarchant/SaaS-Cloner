@@ -19,6 +19,10 @@ export interface RunnerConfig {
   readonly verifierBundlePath: string | null;
   /** Recovery keys (`<key id>.key`, base64) for encrypted exports; never uploaded. */
   readonly recoveryKeysDir: string | null;
+  /** Restore-only admin URL of a disposable PostgreSQL server (never a capture credential). */
+  readonly verifyDatabaseAdminUrl: string | null;
+  /** Network classes restore steps may use during verification. */
+  readonly verifyAllowNetwork: readonly ("registry" | "unknown")[];
   readonly labels: readonly string[];
   /** Keep an investigation's REA session alive this long after its run for follow-ups. */
   readonly sessionIdleMs: number;
@@ -126,6 +130,16 @@ export const parseRunnerConfig = (
     ).map((p) => resolve(p)),
     labels: list(env["REA_WEB_RUNNER_LABELS"], ","),
     verifierBundlePath: resolveVerifierBundle(env),
+    verifyDatabaseAdminUrl: env["REA_WEB_VERIFY_DATABASE_ADMIN_URL"] ?? null,
+    verifyAllowNetwork: list(env["REA_WEB_VERIFY_ALLOW_NETWORK"], ",").map(
+      (value) => {
+        if (value !== "registry" && value !== "unknown")
+          throw new Error(
+            "REA_WEB_VERIFY_ALLOW_NETWORK accepts only registry and unknown",
+          );
+        return value;
+      },
+    ),
     recoveryKeysDir: env["REA_WEB_RECOVERY_KEYS_DIR"]
       ? resolve(env["REA_WEB_RECOVERY_KEYS_DIR"])
       : null,

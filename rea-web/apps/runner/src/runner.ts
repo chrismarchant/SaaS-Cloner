@@ -30,6 +30,9 @@ import {
   type PreservationDeps,
 } from "./preservation/execute.js";
 import { resolveLocalPaths } from "./preservation/localPaths.js";
+import { runRecoveryVerify } from "./recovery/verifyPackage.js";
+import { RUNNER_VERSION } from "./version.js";
+export { RUNNER_VERSION };
 import {
   ExportRefusedError,
   runRecoveryExport,
@@ -43,9 +46,6 @@ export interface RunnerDeps {
   readonly fetchImpl?: typeof fetch;
 }
 
-/** Version recorded as the package producer (rea-web runner). */
-export const RUNNER_VERSION = "0.1.0";
-
 /** Job kinds this runner executes; others are failed with capability_unavailable. */
 export const SUPPORTED_JOB_KINDS = new Set([
   "investigation.run",
@@ -55,6 +55,7 @@ export const SUPPORTED_JOB_KINDS = new Set([
   "preservation.plan",
   "preservation.capture",
   "recovery.export",
+  "recovery.verify",
 ]);
 
 export class Runner {
@@ -293,6 +294,16 @@ export class Runner {
           status: "cleanup_complete",
           remaining_resource_kinds: [],
           detail: "staging package and collector workspace removed",
+        });
+      } else if (job.kind === "recovery.verify") {
+        const result = await runRecoveryVerify(ctx, {
+          databaseAdminUrl: this.deps.config.verifyDatabaseAdminUrl,
+          allowNetwork: this.deps.config.verifyAllowNetwork,
+        });
+        await this.finish(ctx, "succeeded", result, null, {
+          status: "cleanup_complete",
+          remaining_resource_kinds: [],
+          detail: "restore target, package copy and scratch database removed",
         });
       } else if (job.kind === "recovery.export") {
         const result = await runRecoveryExport(ctx, {
