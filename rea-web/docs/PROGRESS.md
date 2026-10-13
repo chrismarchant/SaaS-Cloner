@@ -2,6 +2,30 @@
 
 Updated at each gate checkpoint. Newest first.
 
+## Checkpoint: G03 and G04 complete; G02 UI in progress — 2026-10-13 00:50 UTC
+
+- **Branch / SHA**: `claude/zen-lamport-ijxd7w` at `61032ba8e` (pushed). Upstream unchanged.
+- **G03 evidence** (`tests/e2e/preservation.test.ts`, 4/4, built API + runner + PostgreSQL). A build declared on the preservation fixture is planned and captured on the runner. The fixture has git with a submodule, LFS and uncommitted work, plus PostgreSQL with its own role and an assets directory. The capture credential exists only on the runner. The fixture secret and the DB password appear in no stored file, result or log. The capture is then:
+  - exported as a tar, and as an AES-256-GCM archive encrypted to a runner-held key, which is decrypted, unpacked and integrity-verified outside the platform;
+  - verified through the API with integrity, clean_build, data_restore and behavior all verified.
+- **G04 evidence** (`tests/e2e/recovery.test.ts`, 9/9). Only the exported tar is copied into a clean directory. The `rea-recover.mjs` bundle embedded in the package restores clean_build, data_restore and behavior, with only `PATH` and one database variable in the environment (overall `behavior_verified`). The restored tree matches byte for byte and the invariant holds. Three negatives:
+  - tamper → exit 3, all scopes blocked;
+  - blocked host → data_restore blocked;
+  - registry step without `--allow-network` → blocked, verdict `yes`.
+- **Defects found by integration and fixed at their owners**:
+  - The API silently dropped job results that did not parse. One per-kind contract now applies, and a mismatch is rejected with a 400.
+  - Packages rebuilt from storage lacked their derived files. The recovery package now owns their generation.
+  - A git build source could name any repository on the runner host. Host paths now resolve only through the runner allowlist (`path_hash`); remote URLs must pass the SSRF guard and carry no credentials.
+  - Restore-step validation missed shells invoked by path and launchers, and never checked `cwd`. A `database` network class was added.
+- **Test counts at this SHA**: contracts 118, db 41, storage 103, recovery 111 (5 skipped without isolation), recover-cli 11, preservation 45, model-connector 7, rea-adapter 6, runner 17, api 108, e2e investigation 3, preservation 4, recovery 9.
+- **Not verified**:
+  - A restore on a host where user namespaces are unavailable. Steps then run unisolated, and the report says so.
+  - Registry access during restore: the fixture has no dependencies.
+  - S3 assets: blocked pending the SDK dependency.
+  - Export signing and secret escrow: refused with a reason.
+  - Any cross-host restore.
+- **In progress**: WP09 web UI (Sonnet). Then come Codex review packages 2 and 3, G05 (local companion runner, host routing) and G06 (platform collectors, deployment hardening).
+
 ## Checkpoint: G01 complete — 2026-10-13 00:05 UTC
 
 - **Gate evidence**: `tests/e2e/investigation.test.ts` runs the built API (`apps/api/dist/main.js`) and runner (`apps/runner/dist/main.js`) as separate processes against a fresh PostgreSQL database, a filesystem object store and the built upstream REA MCP server. It covers the register → runner online → upload → routing → investigation → tool calls → findings → evidence bundle → job events → follow-up flow, asserting that both processes' logs contain neither the session secret nor the runner token. Command: `REA_WEB_TEST_DATABASE_URL=… npx vitest run --project e2e` → 1/1 (about 19 s). The model provider is disabled (no approved budget), so the model follow-up loop is recorded as unavailable.
