@@ -539,11 +539,14 @@ export const COMPONENT_STATUSES = [
 ] as const;
 export const componentStatusSchema = z.enum(COMPONENT_STATUSES);
 
-export const preservationPlanSchema = z.object({
-  id: idSchema,
-  build_id: idSchema,
-  job_id: idSchema,
-  runner_id: idSchema.nullable(),
+const omissionViewSchema = z.object({
+  what: z.string(),
+  reason: z.string(),
+  remediation: z.string(),
+});
+
+/** The body a `preservation.plan` job produces (runner result `plan`). */
+export const preservationPlanBodySchema = z.object({
   components: z.array(
     z.object({
       id: z.string(),
@@ -555,20 +558,20 @@ export const preservationPlanSchema = z.object({
       estimated_bytes: z.number().int().nonnegative().nullable(),
       dependencies: z.array(z.string()),
       method: z.string(),
-      omissions: z.array(
-        z.object({
-          what: z.string(),
-          reason: z.string(),
-          remediation: z.string(),
-        }),
-      ),
+      omissions: z.array(omissionViewSchema),
       feasible: z.boolean(),
     }),
   ),
   consistency_strategy: z.string(),
-  known_omissions: z.array(
-    z.object({ what: z.string(), reason: z.string(), remediation: z.string() }),
-  ),
+  known_omissions: z.array(omissionViewSchema),
+});
+export type PreservationPlanBody = z.infer<typeof preservationPlanBodySchema>;
+
+export const preservationPlanSchema = preservationPlanBodySchema.extend({
+  id: idSchema,
+  build_id: idSchema,
+  job_id: idSchema,
+  runner_id: idSchema.nullable(),
   created_at: timestampSchema,
 });
 
@@ -630,3 +633,42 @@ export const exportSchema = z.object({
   encryption: z.record(z.string(), z.unknown()).nullable(),
   created_at: timestampSchema,
 });
+
+/**
+ * Structured job results the control plane applies to resource rows, one
+ * schema per job kind. The runner validates its result against these before
+ * completing a job, and the API rejects a successful completion whose result
+ * does not match, so a mismatch fails loudly instead of being dropped.
+ */
+export const jobResultSchemas = {
+  "preservation.plan": z.object({ plan: preservationPlanBodySchema }),
+  "preservation.capture": z.object({
+    capture: z.object({
+      consistency: captureSchema.shape.consistency.unwrap(),
+      component_statuses: z.record(z.string(), componentStatusSchema),
+      manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+      package_id: z.string(),
+      files: z.number().int().nonnegative(),
+      bytes: z.number().int().nonnegative(),
+    }),
+  }),
+  "recovery.verify": z.object({
+    verification: z.object({
+      results: verificationSchema.shape.results,
+      network_required: verificationSchema.shape.network_required.unwrap(),
+      overall: verificationSchema.shape.overall.unwrap(),
+    }),
+  }),
+  "recovery.export": z.object({
+    export: z.object({
+      signature: exportSchema.shape.signature,
+      encryption: exportSchema.shape.encryption,
+    }),
+  }),
+} as const;
+export type JobResultKind = keyof typeof jobResultSchemas;
+export const hasJobResultSchema = (kind: string): kind is JobResultKind =>
+  Object.hasOwn(jobResultSchemas, kind);
+export type JobResult<K extends JobResultKind> = z.infer<
+  (typeof jobResultSchemas)[K]
+>;

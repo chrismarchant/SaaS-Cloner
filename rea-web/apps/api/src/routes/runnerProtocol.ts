@@ -34,7 +34,7 @@ import {
   toolCallView,
 } from "./mappers.js";
 import { viewsFor } from "./investigations.js";
-import { applyJobResult } from "./runnerResults.js";
+import { applyJobResult, assertJobResult } from "./runnerResults.js";
 import { sendObject } from "./streaming.js";
 import { STREAMED, type HandlersFor, type RouteContext } from "./types.js";
 import { declaredLength } from "./uploads.js";
@@ -454,6 +454,7 @@ export const runnerProtocolHandlers = (): HandlersFor<
 
   async runnerComplete({ ctx, runner, params, body }) {
     const job = await loadRunnerJob(ctx, runner, params.j);
+    assertJobResult(job.kind, body.outcome, body.result);
     const lease = presented(runner, job.id, body.fencing_token);
     await ctx.fencing.appendEvents(lease, [
       { kind: "job.cleanup", payload: { ...body.cleanup } },

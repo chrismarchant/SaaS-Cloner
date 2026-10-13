@@ -1,42 +1,47 @@
-import { z } from "zod";
 import {
-  captureSchema,
-  componentStatusSchema,
-  preservationPlanSchema,
-  verificationSchema,
+  ApiError,
+  hasJobResultSchema,
+  jobResultSchemas,
+  type JobKind,
+  type JobResult,
+  type JobResultKind,
 } from "@rea-web/contracts";
 import type { JobRecord, JsonObject } from "@rea-web/db";
 import type { AppContext } from "../context.js";
 
-const planResult = preservationPlanSchema.pick({
-  components: true,
-  consistency_strategy: true,
-  known_omissions: true,
-});
-const captureResult = z.object({
-  consistency: captureSchema.shape.consistency.optional(),
-  component_statuses: z.record(z.string(), componentStatusSchema).optional(),
-});
-const verificationResult = z.object({
-  results: verificationSchema.shape.results.optional(),
-  network_required: verificationSchema.shape.network_required.optional(),
-  overall: verificationSchema.shape.overall.optional(),
-});
-const exportResult = z.object({
-  signature: z.record(z.string(), z.unknown()).nullable().optional(),
-  encryption: z.record(z.string(), z.unknown()).nullable().optional(),
-});
-
-const section = <S extends z.ZodType>(
-  result: JsonObject | null,
-  field: string,
-  schema: S,
-): z.output<S> | null => {
-  const raw = result?.[field];
-  if (raw === undefined || raw === null) return null;
-  const parsed = schema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+/**
+ * Validate a successful completion's result against its job kind's contract
+ * before the job is completed. A mismatch is the runner's bug and must not be
+ * silently dropped, so the completion is refused with the schema issues.
+ */
+export const assertJobResult = (
+  kind: JobKind,
+  outcome: string,
+  result: unknown,
+): void => {
+  if (outcome !== "succeeded" || !hasJobResultSchema(kind)) return;
+  const parsed = jobResultSchemas[kind].safeParse(result);
+  if (!parsed.success)
+    throw new ApiError(
+      "validation_failed",
+      `Result does not match the ${kind} result contract`,
+      {
+        issues: parsed.error.issues.slice(0, 20).map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+    );
 };
+
+/** Results were validated by `assertJobResult` when the job completed. */
+const parsedResult = <K extends JobResultKind>(
+  kind: K,
+  job: JobRecord,
+): JobResult<K> | null =>
+  job.state === "succeeded"
+    ? (jobResultSchemas[kind].parse(job.result) as JobResult<K>)
+    : null;
 
 const terminalStatus = (
   job: JobRecord,
@@ -67,7 +72,7 @@ export const applyJobResult = async (
   const succeeded = job.state === "succeeded";
   switch (job.kind) {
     case "preservation.plan": {
-      const plan = succeeded ? section(job.result, "plan", planResult) : null;
+      const plan = parsedResult("preservation.plan", job)?.plan ?? null;
       const row = await ctx.repos.plans.findByJobId(job.id);
       if (row !== null && plan !== null)
         await ctx.repos.plans.setPlan(row.id, {
@@ -79,50 +84,39 @@ export const applyJobResult = async (
     case "preservation.capture": {
       const row = await ctx.repos.captures.findByJobId(job.id);
       if (row === null) return;
-      const parsed = succeeded
-        ? section(job.result, "capture", captureResult)
-        : null;
+      const parsed = parsedResult("preservation.capture", job)?.capture;
       await ctx.repos.captures.update(row.id, {
         status: terminalStatus(job),
         finished_at: ctx.now(),
-        ...(parsed?.consistency === undefined
+        ...(parsed === undefined
           ? {}
-          : { consistency: parsed.consistency }),
-        ...(parsed?.component_statuses === undefined
-          ? {}
-          : { component_statuses: parsed.component_statuses }),
+          : {
+              consistency: parsed.consistency,
+              component_statuses: parsed.component_statuses,
+            }),
       });
       return;
     }
     case "recovery.verify": {
       const row = await ctx.repos.verifications.findByJobId(job.id);
-      const parsed = succeeded
-        ? section(job.result, "verification", verificationResult)
-        : null;
-      if (row !== null && parsed !== null)
+      const parsed = parsedResult("recovery.verify", job)?.verification;
+      if (row !== null && parsed !== undefined)
         await ctx.repos.verifications.update(row.id, {
-          ...(parsed.results === undefined ? {} : { results: parsed.results }),
-          ...(parsed.network_required === undefined
-            ? {}
-            : { network_required: parsed.network_required }),
-          ...(parsed.overall === undefined ? {} : { overall: parsed.overall }),
+          results: parsed.results,
+          network_required: parsed.network_required,
+          overall: parsed.overall,
         });
       return;
     }
     case "recovery.export": {
       const row = await ctx.repos.exports.findByJobId(job.id);
       if (row === null) return;
-      const parsed = succeeded
-        ? section(job.result, "export", exportResult)
-        : null;
+      const parsed = parsedResult("recovery.export", job)?.export;
       await ctx.repos.exports.update(row.id, {
         status: terminalStatus(job) === "completed" ? "completed" : "failed",
-        ...(parsed?.signature === undefined
+        ...(parsed === undefined
           ? {}
-          : { signature: parsed.signature }),
-        ...(parsed?.encryption === undefined
-          ? {}
-          : { encryption: parsed.encryption }),
+          : { signature: parsed.signature, encryption: parsed.encryption }),
       });
       return;
     }
