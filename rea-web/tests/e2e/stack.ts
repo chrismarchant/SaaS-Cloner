@@ -96,7 +96,8 @@ export class Stack {
   private databaseName = "";
   private databaseUrl = "";
 
-  async start(): Promise<void> {
+  /** Start the API; `staticDir` serves a built web UI from the same origin. */
+  async start(options: { staticDir?: string } = {}): Promise<void> {
     this.scratch = await mkdtemp(join(tmpdir(), "rea-web-e2e-"));
     this.databaseName = `rea_web_e2e_${randomBytes(6).toString("hex")}`;
     const admin = new pg.Client({ connectionString: TEST_DATABASE_URL });
@@ -121,6 +122,7 @@ export class Stack {
         REA_WEB_HOST: "127.0.0.1",
         REA_WEB_PORT: String(port),
         REA_WEB_LOG_LEVEL: "info",
+        ...(options.staticDir ? { REA_WEB_STATIC_DIR: options.staticDir } : {}),
       },
       this.scratch,
     );
