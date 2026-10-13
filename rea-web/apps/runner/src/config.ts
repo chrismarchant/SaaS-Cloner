@@ -17,6 +17,8 @@ export interface RunnerConfig {
   readonly localTargetAllowlist: readonly string[];
   /** rea-recover bundle embedded into captured packages, when present. */
   readonly verifierBundlePath: string | null;
+  /** Recovery keys (`<key id>.key`, base64) for encrypted exports; never uploaded. */
+  readonly recoveryKeysDir: string | null;
   readonly labels: readonly string[];
   /** Keep an investigation's REA session alive this long after its run for follow-ups. */
   readonly sessionIdleMs: number;
@@ -124,6 +126,9 @@ export const parseRunnerConfig = (
     ).map((p) => resolve(p)),
     labels: list(env["REA_WEB_RUNNER_LABELS"], ","),
     verifierBundlePath: resolveVerifierBundle(env),
+    recoveryKeysDir: env["REA_WEB_RECOVERY_KEYS_DIR"]
+      ? resolve(env["REA_WEB_RECOVERY_KEYS_DIR"])
+      : null,
     sessionIdleMs: Number.isFinite(idle) && idle >= 0 ? idle : 15 * 60_000,
     logLevel: (LOG_LEVELS as readonly string[]).includes(level)
       ? level

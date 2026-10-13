@@ -124,6 +124,13 @@ const wrongKind = (job: JobRecord, kind: string): ApiError =>
     `Artifact kind ${kind} is not accepted for ${job.kind} jobs`,
   );
 
+/** Storage prefix of one capture's package files; `manifest.json` sits at its root. */
+export const capturePrefix = (
+  projectId: string,
+  buildId: string,
+  captureId: string,
+): string => `projects/${projectId}/builds/${buildId}/captures/${captureId}`;
+
 /** Derives the storage key and bookkeeping for one artifact; clients never supply keys. */
 export const planArtifact = (
   ctx: AppContext,
@@ -186,7 +193,7 @@ export const planArtifact = (
 
   if (job.kind === "preservation.capture") {
     const captureId = requireInput(job, "capture_id");
-    const base = `${buildBase}/captures/${captureId}`;
+    const base = capturePrefix(p, buildId, captureId);
     if (kind === "capture_manifest") {
       const key = `${base}/manifest.json`;
       return {

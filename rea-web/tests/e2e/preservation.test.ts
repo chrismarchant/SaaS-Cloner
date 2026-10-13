@@ -5,7 +5,7 @@
  * uncommitted work, a PostgreSQL database with its own role, and an assets
  * directory). Local paths reach the runner only through its allowlist.
  */
-import { realpath, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,6 +22,12 @@ import {
   type FixtureBuild,
 } from "../../packages/preservation/test/fixtureBuild.js";
 import { localPathHash } from "../../apps/runner/src/preservation/localPaths.js";
+import {
+  decryptExport,
+  generateRecoveryKey,
+  unpackExport,
+  verifyIntegrity,
+} from "@rea-web/recovery";
 import { Stack, stackUnavailableReason } from "./stack.js";
 
 const unavailable =
@@ -35,6 +41,9 @@ describeStack("preserve workflow through the built API and runner", () => {
   let fx: FixtureBuild;
   let project = "";
   let runnerId = "";
+  let buildId = "";
+  let captureId = "";
+  const recoveryKey = generateRecoveryKey();
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), "rea-web-e2e-preserve-"));
@@ -51,7 +60,18 @@ describeStack("preserve workflow through the built API and runner", () => {
       body: { name: "e2e-preserve", labels: [] },
     });
     runnerId = runner.json.id;
+    // Recovery keys live in their own directory, outside every package.
+    const keysDir = join(scratch, "keys");
+    await mkdir(keysDir, { mode: 0o700 });
+    await writeFile(
+      join(keysDir, `${recoveryKey.keyId}.key`),
+      recoveryKey.keyBase64,
+      {
+        mode: 0o600,
+      },
+    );
     stack.startRunner(runner.json.token, {
+      REA_WEB_RECOVERY_KEYS_DIR: keysDir,
       REA_WEB_RUNNER_LOCAL_TARGET_ALLOWLIST: `${fx.repoPath}:${fx.assetsPath}`,
       // The capture credential lives only on the runner, under the declared name.
       [DB_ENV_NAME]: fx.databaseUrl,
@@ -149,6 +169,8 @@ describeStack("preserve workflow through the built API and runner", () => {
       ).json,
     );
     expect(capture.status).toBe("completed");
+    buildId = build.json.id;
+    captureId = captured.json.id;
     expect(capture.component_statuses["source:main"]).toBe("captured");
     expect(capture.component_statuses["data:db"]).toBe("captured");
     const manifestResponse = await stack.request(
@@ -171,6 +193,74 @@ describeStack("preserve workflow through the built API and runner", () => {
       expect(text).not.toContain(fx.secretMarker);
       expect(text).not.toContain(fx.databasePassword);
     }
+  });
+
+  const exportCapture = async (body: Record<string, unknown>) => {
+    const created = await stack.request(
+      "POST",
+      `/projects/${project}/builds/${buildId}/captures/${captureId}/exports`,
+      { body },
+    );
+    expect(created.status, created.text).toBe(202);
+    const job = await waitForJob(created.json.job_id);
+    expect(job.state, JSON.stringify(job.failure)).toBe("succeeded");
+    const view = (
+      await stack.request(
+        "GET",
+        `/projects/${project}/builds/${buildId}/exports/${created.json.id}`,
+      )
+    ).json;
+    const response = await fetch(
+      `${stack.apiUrl}/api/v1/projects/${project}/builds/${buildId}/exports/${created.json.id}/download`,
+      { headers: { cookie: stack.cookie } },
+    );
+    expect(response.status).toBe(200);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { view, bytes };
+  };
+
+  it("exports the capture as a tar and as an encrypted archive that restore tooling opens", async () => {
+    expect(captureId).not.toBe("");
+    const plain = await exportCapture({});
+    expect(plain.view.status).toBe("completed");
+    const tar = join(scratch, "export.tar");
+    await writeFile(tar, plain.bytes);
+    const unpacked = join(scratch, "unpacked-plain");
+    const plainRoot = (await unpackExport(tar, unpacked)).root;
+    expect((await verifyIntegrity(plainRoot)).ok).toBe(true);
+
+    const sealed = await exportCapture({
+      encrypt_to_recipients: [recoveryKey.keyId],
+    });
+    expect(sealed.view.encryption).toMatchObject({
+      scheme: "aes-256-gcm-envelope",
+      recipients: [recoveryKey.keyId],
+      key_location: "external",
+    });
+    // The archive is ciphertext and holds no key material.
+    expect(sealed.bytes.includes(Buffer.from(recoveryKey.keyBase64))).toBe(
+      false,
+    );
+    expect(sealed.bytes.includes(Buffer.from("manifest.json"))).toBe(false);
+    const encrypted = join(scratch, "export.tar.enc");
+    await writeFile(encrypted, sealed.bytes);
+    const decrypted = join(scratch, "decrypted.tar");
+    await decryptExport(encrypted, decrypted, {
+      keyBase64: recoveryKey.keyBase64,
+    });
+    const opened = join(scratch, "unpacked-sealed");
+    const sealedRoot = (await unpackExport(decrypted, opened)).root;
+    expect((await verifyIntegrity(sealedRoot)).ok).toBe(true);
+
+    // A key the runner does not hold is refused, not silently skipped.
+    const missingKey = await stack.request(
+      "POST",
+      `/projects/${project}/builds/${buildId}/captures/${captureId}/exports`,
+      { body: { encrypt_to_recipients: ["not-a-key-on-this-runner"] } },
+    );
+    const refused = await waitForJob(missingKey.json.job_id);
+    expect(refused.state).toBe("failed");
+    expect(refused.failure.message).toContain("not on this runner");
   });
 
   it("refuses a git source that names a path on the runner host", async () => {

@@ -18,6 +18,11 @@ export {
 export { PACKAGE_COMPONENT_ID } from "./layout.js";
 export { renderRecoveryMarkdown } from "./markdown.js";
 export {
+  generatedFileContents,
+  materializeGeneratedFiles,
+  writeGeneratedFiles,
+} from "./generated.js";
+export {
   type IntegrityReport,
   type VerifyIntegrityOptions,
   readPackage,

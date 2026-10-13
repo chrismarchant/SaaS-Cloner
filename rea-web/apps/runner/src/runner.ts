@@ -30,6 +30,10 @@ import {
   type PreservationDeps,
 } from "./preservation/execute.js";
 import { resolveLocalPaths } from "./preservation/localPaths.js";
+import {
+  ExportRefusedError,
+  runRecoveryExport,
+} from "./recovery/exportPackage.js";
 
 export interface RunnerDeps {
   readonly config: RunnerConfig;
@@ -50,6 +54,7 @@ export const SUPPORTED_JOB_KINDS = new Set([
   "investigation.export",
   "preservation.plan",
   "preservation.capture",
+  "recovery.export",
 ]);
 
 export class Runner {
@@ -289,6 +294,15 @@ export class Runner {
           remaining_resource_kinds: [],
           detail: "staging package and collector workspace removed",
         });
+      } else if (job.kind === "recovery.export") {
+        const result = await runRecoveryExport(ctx, {
+          recoveryKeysDir: this.deps.config.recoveryKeysDir,
+        });
+        await this.finish(ctx, "succeeded", result, null, {
+          status: "cleanup_complete",
+          remaining_resource_kinds: [],
+          detail: "downloaded package and archives removed",
+        });
       } else if (job.kind === "investigation.export") {
         const result = await runExport(ctx, job.input);
         await this.finish(ctx, "succeeded", result, null, {
@@ -379,28 +393,34 @@ export class Runner {
             details: { dimension: reason.dimension },
             retryable: false,
           }
-        : error instanceof SourceRefusedError
+        : error instanceof ExportRefusedError
           ? {
-              code: "unsafe_url",
+              code: "capability_unavailable",
               message: error.message,
               retryable: false,
             }
-          : error instanceof SessionClosedError
+          : error instanceof SourceRefusedError
             ? {
-                code: "capability_unavailable",
+                code: "unsafe_url",
                 message: error.message,
-                details: { reason: "session_closed" },
                 retryable: false,
               }
-            : {
-                code: "runner_error",
-                message: this.redactor
-                  .redactText(
-                    error instanceof Error ? error.message : String(error),
-                  )
-                  .slice(0, 2000),
-                retryable: false,
-              };
+            : error instanceof SessionClosedError
+              ? {
+                  code: "capability_unavailable",
+                  message: error.message,
+                  details: { reason: "session_closed" },
+                  retryable: false,
+                }
+              : {
+                  code: "runner_error",
+                  message: this.redactor
+                    .redactText(
+                      error instanceof Error ? error.message : String(error),
+                    )
+                    .slice(0, 2000),
+                  retryable: false,
+                };
     await this.finish(ctx, "failed", null, failure, cleanup);
   }
 

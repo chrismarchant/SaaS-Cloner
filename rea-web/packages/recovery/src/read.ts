@@ -7,20 +7,14 @@ import {
 import { PackageFormatError } from "./errors.js";
 import {
   MANIFEST_FILE,
-  MANIFEST_SCHEMA_FILE,
-  RECOVERY_GUIDE_FILE,
   SIGNATURE_FILE,
   compareCodepoints,
   hashFile,
   sha256Hex,
   walkTree,
 } from "./fsutil.js";
-import {
-  GENERATED_FILES,
-  findManifestProblems,
-  manifestSchemaFileContent,
-} from "./layout.js";
-import { renderRecoveryMarkdown } from "./markdown.js";
+import { GENERATED_FILES, findManifestProblems } from "./layout.js";
+import { generatedFileContents } from "./generated.js";
 
 const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
 
@@ -107,10 +101,12 @@ const ancestorsAndSelf = (path: string): string[] => {
 const generatedExpectations = (
   manifest: RecoveryManifest,
 ): Map<string, string> =>
-  new Map([
-    [RECOVERY_GUIDE_FILE, sha256Hex(renderRecoveryMarkdown(manifest))],
-    [MANIFEST_SCHEMA_FILE, sha256Hex(manifestSchemaFileContent())],
-  ]);
+  new Map(
+    [...generatedFileContents(manifest)].map(([path, content]) => [
+      path,
+      sha256Hex(content),
+    ]),
+  );
 
 export interface VerifyIntegrityOptions {
   signal?: AbortSignal;

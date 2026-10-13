@@ -4,6 +4,8 @@ import {
   type JobFailure,
   buildJobInputSchema,
   planJobInputSchema,
+  recoveryManifestSchema,
+  validateRelativePath,
   type JobRequirements,
   RUNNER_PROTOCOL_VERSION,
   digestCapabilities,
@@ -22,6 +24,7 @@ import type { PresentedLease } from "../orchestrator/fencing.js";
 import {
   parseArtifactHeaders,
   parseFencingHeader,
+  capturePrefix,
   planArtifact,
   requireInput,
   storeArtifact,
@@ -603,6 +606,42 @@ const serveInput = async (
       sha256: capture.manifest_sha256,
     });
   }
+  const captureFile = /^capture-file-(\d{1,6})$/u.exec(name);
+  if (captureFile?.[1] !== undefined) {
+    // Package files are addressed by their index in the stored manifest, which
+    // owns file identity; the runner checks each digest against it.
+    const capture = await ctx.repos.captures.findById(
+      projectId,
+      requireInput(job, "capture_id"),
+    );
+    if (capture === null || capture.manifest_object_key === null)
+      throw new ApiError("not_found", "Manifest not found");
+    const manifest = recoveryManifestSchema.parse(
+      await readJsonObject(
+        ctx,
+        capture.manifest_object_key,
+        MANIFEST_READ_LIMIT,
+      ),
+    );
+    const file = manifest.files[Number(captureFile[1])];
+    if (file === undefined)
+      throw new ApiError("not_found", "No such package file", { name });
+    const checked = validateRelativePath(file.path);
+    if (!checked.ok)
+      throw new ApiError("unsafe_path", "Manifest file path is not safe", {
+        rejection: checked.rejection,
+      });
+    return sendObject(
+      ctx,
+      reply,
+      `${capturePrefix(projectId, capture.build_id, capture.id)}/${checked.path}`,
+      {
+        contentType: "application/octet-stream",
+        sha256: file.sha256,
+        size: file.size,
+      },
+    );
+  }
   const artifact = /^artifact-([0-9a-f-]{36})$/u.exec(name);
   if (artifact?.[1] !== undefined) {
     const found = await evidenceFor(ctx, job, artifact[1]);
@@ -635,9 +674,13 @@ const serveInput = async (
 const ARGUMENTS_READ_LIMIT = 4 * 1024 * 1024;
 
 /** Reads a small stored JSON object; absent or unparseable objects are `null`. */
+/** Manifests list every package file; allow far more than tool arguments. */
+const MANIFEST_READ_LIMIT = 64 * 1024 * 1024;
+
 const readJsonObject = async (
   ctx: AppContext,
   key: string | null,
+  limit = ARGUMENTS_READ_LIMIT,
 ): Promise<unknown> => {
   if (key === null) return null;
   try {
@@ -646,7 +689,7 @@ const readJsonObject = async (
     for await (const chunk of await ctx.store.get(key)) {
       const buffer = Buffer.from(chunk as Uint8Array);
       total += buffer.length;
-      if (total > ARGUMENTS_READ_LIMIT) return null;
+      if (total > limit) return null;
       chunks.push(buffer);
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;

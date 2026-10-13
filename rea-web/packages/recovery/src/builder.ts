@@ -14,8 +14,6 @@ import { PackageFormatError } from "./errors.js";
 import {
   LICENSES_FILE,
   MANIFEST_FILE,
-  MANIFEST_SCHEMA_FILE,
-  RECOVERY_GUIDE_FILE,
   compareCodepoints,
   isInsideOrEqual,
   openRegularFile,
@@ -26,11 +24,10 @@ import {
   PACKAGE_COMPONENT_ID,
   findManifestProblems,
   isReservedPath,
-  manifestSchemaFileContent,
   pathPlacementProblem,
   serializeJson,
 } from "./layout.js";
-import { renderRecoveryMarkdown } from "./markdown.js";
+import { writeGeneratedFiles } from "./generated.js";
 
 type Manifest = RecoveryManifest;
 export type ComponentInput = Omit<ManifestComponent, "entries" | "bytes">;
@@ -367,14 +364,7 @@ class Builder implements PackageBuilder {
       const manifest = this.draft(meta);
       await mkdir(join(this.root, "recovery"), { recursive: true });
       await this.assertContained(join(this.root, "recovery"));
-      await writeFileAtomic(
-        join(this.root, ...MANIFEST_SCHEMA_FILE.split("/")),
-        manifestSchemaFileContent(),
-      );
-      await writeFileAtomic(
-        join(this.root, RECOVERY_GUIDE_FILE),
-        renderRecoveryMarkdown(manifest),
-      );
+      await writeGeneratedFiles(this.root, manifest);
       // manifest.json is written last so a partial package never has one.
       await writeFileAtomic(
         join(this.root, MANIFEST_FILE),
