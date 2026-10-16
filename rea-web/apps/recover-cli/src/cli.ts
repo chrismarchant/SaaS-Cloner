@@ -19,8 +19,11 @@ import {
   readEncryptionHeader,
   restorePackage,
   unpackExport,
+  verifyArchiveSignature,
   verifyPackage,
 } from "@rea-web/recovery";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { type Command, HELP, UsageError, parseCommand } from "./args.js";
 import { parseEnvFile } from "./envFile.js";
 import { exitCodeFor, summarize } from "./summary.js";
@@ -113,6 +116,45 @@ async function unpackAny(
   }
 }
 
+/** A detached export signature that did not verify; exits 3 (blocked). */
+class ArchiveSignatureError extends Error {}
+
+/**
+ * Check a detached export signature against the archive file exactly as
+ * given (encrypted or not), before anything is unpacked or decrypted.
+ */
+async function checkArchiveSignature(
+  input: string,
+  signaturePath: string | undefined,
+  publicKeyPath: string | undefined,
+  io: CliIo,
+): Promise<void> {
+  if (signaturePath === undefined) return;
+  if (publicKeyPath === undefined)
+    throw new UsageError("--archive-signature needs --archive-key");
+  if ((await stat(input)).isDirectory())
+    throw new UsageError(
+      "--archive-signature applies to an export archive, not a directory",
+    );
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(input))
+    hash.update(chunk as Buffer);
+  let document: unknown;
+  try {
+    document = JSON.parse(await readFile(signaturePath, "utf8"));
+  } catch {
+    throw new ArchiveSignatureError("archive signature file is not JSON");
+  }
+  const result = verifyArchiveSignature(
+    document,
+    hash.digest("hex"),
+    await readFile(publicKeyPath, "utf8"),
+  );
+  if (!result.ok)
+    throw new ArchiveSignatureError(`archive signature: ${result.reason}`);
+  io.stdout(`archive signature: verified (key ${result.keyId})\n`);
+}
+
 /** A package directory, unpacking a tar export into a private temp dir first. */
 async function openPackage(
   input: string,
@@ -160,6 +202,12 @@ async function runVerify(
   cmd: Extract<Command, { kind: "verify" }>,
   io: CliIo,
 ): Promise<number> {
+  await checkArchiveSignature(
+    cmd.input,
+    cmd.archiveSignature,
+    cmd.archiveKey,
+    io,
+  );
   const pkg = await openPackage(cmd.input);
   try {
     await assertReportOutside(cmd.report, pkg.dir);
@@ -199,6 +247,12 @@ async function runRestore(
     cmd.publicKey === undefined
       ? undefined
       : await readFile(cmd.publicKey, "utf8");
+  await checkArchiveSignature(
+    cmd.input,
+    cmd.archiveSignature,
+    cmd.archiveKey,
+    io,
+  );
   const pkg = await openPackage(cmd.input);
   try {
     await assertReportOutside(cmd.report, pkg.dir);
@@ -257,12 +311,22 @@ export async function runCli(
       case "restore":
         return await runRestore(cmd, env, io);
       case "unpack": {
+        await checkArchiveSignature(
+          cmd.input,
+          cmd.archiveSignature,
+          cmd.archiveKey,
+          io,
+        );
         const root = await unpackAny(cmd.input, cmd.out, cmd.keyFile);
         io.stdout(`unpacked to ${root}\n`);
         return 0;
       }
     }
   } catch (error) {
+    if (error instanceof ArchiveSignatureError) {
+      io.stderr(`rea-recover: ${error.message}\n`);
+      return 3;
+    }
     if (error instanceof UsageError) {
       io.stderr(
         `rea-recover: ${error.message}\nRun rea-recover --help for usage.\n`,

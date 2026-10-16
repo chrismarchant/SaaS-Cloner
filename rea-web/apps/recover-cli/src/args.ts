@@ -5,6 +5,8 @@ export type Command =
       kind: "verify";
       input: string;
       publicKey: string | undefined;
+      archiveSignature: string | undefined;
+      archiveKey: string | undefined;
       report: string | undefined;
       allowProduction: boolean;
     }
@@ -18,11 +20,20 @@ export type Command =
       allowNetwork: ("registry" | "unknown")[];
       envFile: string | undefined;
       publicKey: string | undefined;
+      archiveSignature: string | undefined;
+      archiveKey: string | undefined;
       report: string | undefined;
       timeoutMs: number | undefined;
       allowProduction: boolean;
     }
-  | { kind: "unpack"; input: string; out: string; keyFile: string | undefined }
+  | {
+      kind: "unpack";
+      input: string;
+      out: string;
+      keyFile: string | undefined;
+      archiveSignature: string | undefined;
+      archiveKey: string | undefined;
+    }
   | { kind: "help" }
   | { kind: "version" };
 
@@ -100,6 +111,8 @@ export function parseCommand(argv: string[]): Command {
     case "verify": {
       const { values, positionals } = parse(rest, {
         "public-key": { type: "string" },
+        "archive-signature": { type: "string" },
+        "archive-key": { type: "string" },
         report: { type: "string" },
         "allow-production": { type: "boolean" },
       });
@@ -107,6 +120,8 @@ export function parseCommand(argv: string[]): Command {
         kind: "verify",
         input: one(positionals, "package directory or export tar"),
         publicKey: str(values["public-key"]),
+        archiveSignature: str(values["archive-signature"]),
+        archiveKey: str(values["archive-key"]),
         report: str(values["report"]),
         allowProduction: values["allow-production"] === true,
       };
@@ -120,6 +135,8 @@ export function parseCommand(argv: string[]): Command {
         "allow-network": { type: "string" },
         "env-file": { type: "string" },
         "public-key": { type: "string" },
+        "archive-signature": { type: "string" },
+        "archive-key": { type: "string" },
         report: { type: "string" },
         "timeout-ms": { type: "string" },
         "allow-production": { type: "boolean" },
@@ -152,6 +169,8 @@ export function parseCommand(argv: string[]): Command {
         ),
         envFile: str(values["env-file"]),
         publicKey: str(values["public-key"]),
+        archiveSignature: str(values["archive-signature"]),
+        archiveKey: str(values["archive-key"]),
         report: str(values["report"]),
         timeoutMs,
         allowProduction: values["allow-production"] === true,
@@ -161,6 +180,8 @@ export function parseCommand(argv: string[]): Command {
       const { values, positionals } = parse(rest, {
         out: { type: "string" },
         "key-file": { type: "string" },
+        "archive-signature": { type: "string" },
+        "archive-key": { type: "string" },
       });
       const out = str(values["out"]);
       if (out === undefined) throw new UsageError("--out is required");
@@ -169,6 +190,8 @@ export function parseCommand(argv: string[]): Command {
         input: one(positionals, "export file"),
         out,
         keyFile: str(values["key-file"]),
+        archiveSignature: str(values["archive-signature"]),
+        archiveKey: str(values["archive-key"]),
       };
     }
     default:
@@ -179,15 +202,20 @@ export function parseCommand(argv: string[]): Command {
 export const HELP = `rea-recover: verify and restore a REA Web recovery package without the control plane
 
 Usage:
-  rea-recover verify <package-dir|export.tar> [--public-key <file>] [--report <file>]
+  rea-recover verify <package-dir|export.tar> [--public-key <file>] [--archive-signature <file> --archive-key <public.pem>] [--report <file>]
   rea-recover restore <package-dir|export.tar> --scope clean_build[,data_restore,behavior]
                       --target <empty-dir> [--database-url-env NAME] [--assets-root <dir>]
                       [--allow-network registry[,unknown]] [--env-file <file>]
-                      [--public-key <file>] [--report <file>] [--timeout-ms N]
+                      [--public-key <file>] [--archive-signature <file> --archive-key <public.pem>] [--report <file>] [--timeout-ms N]
   rea-recover unpack <export.tar|export.tar.enc> --out <empty-dir> [--key-file <file>]
+                     [--archive-signature <file> --archive-key <public.pem>]
   rea-recover --version | --help
 
 verify checks every file hash, the manifest and (with --public-key) the signature.
+--archive-signature checks a detached export signature (rea-web-export-signature)
+against the archive file exactly as given, before anything is unpacked, with
+the signer's public key in --archive-key (--public-key is the manifest
+signature key). A signature that does not verify exits 3.
 restore verifies first, then replays the declared restore steps into the empty
 --target directory and, for data_restore, an empty disposable database whose URL
 is read from the environment variable named by --database-url-env.

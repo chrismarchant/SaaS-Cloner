@@ -335,6 +335,7 @@ export class Runner {
       } else if (job.kind === "recovery.export") {
         const result = await runRecoveryExport(ctx, {
           recoveryKeysDir: this.deps.config.recoveryKeysDir,
+          signingKeysDir: this.deps.config.exportSigningKeysDir,
         });
         await this.finish(ctx, "succeeded", result, null, {
           status: "cleanup_complete",

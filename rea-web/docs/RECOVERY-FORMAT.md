@@ -111,6 +111,32 @@ step completed with outbound network denied.
   and webhook endpoints that the restorer must leave disabled unless explicitly
   overridden with `--allow-production` (refused by the verifier mode).
 
+## Export signatures
+
+A finalized manifest is immutable, so a signature requested when an export
+is created cannot be added to the manifest. Instead it is a detached
+document over the export archive exactly as distributed, after any
+encryption:
+
+```json
+{
+  "format": "rea-web-export-signature",
+  "version": 1,
+  "algorithm": "ed25519",
+  "public_key_id": "<sha256 of the DER SPKI public key>",
+  "archive_sha256": "<sha256 of the archive file>",
+  "signed_at": "…",
+  "signature": "<base64 Ed25519 over 'rea-web-export-signature:v1\n' + archive_sha256>"
+}
+```
+
+The signing key stays on the runner (`REA_WEB_EXPORT_SIGNING_KEYS_DIR`,
+`<public key id>.pem`). The command
+`rea-recover verify|restore|unpack <archive> --archive-signature <file> --archive-key <public.pem>`
+checks the signature before anything is unpacked, and exits 3 if it does
+not verify. A manifest-level signature (`signature` in the manifest, checked
+with `--public-key`) is declared at capture time.
+
 ## Independence requirements
 
 - `recovery/rea-recover.mjs` is a self-contained Node 22 bundle with no

@@ -30,9 +30,14 @@ export {
 } from "./read.js";
 export { type ExportResult, packExport, unpackExport } from "./archive.js";
 export {
+  type ExportSignature,
   type SigningKeyPair,
+  EXPORT_SIGNATURE_FORMAT,
   generateSigningKeyPair,
+  signArchiveDigest,
   signManifest,
+  signingKeyId,
+  verifyArchiveSignature,
   verifySignature,
 } from "./signing.js";
 export {

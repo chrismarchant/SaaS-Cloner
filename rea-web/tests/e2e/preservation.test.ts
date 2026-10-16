@@ -5,6 +5,7 @@
  * uncommitted work, a PostgreSQL database with its own role, and an assets
  * directory). Local paths reach the runner only through its allowlist.
  */
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,10 +26,11 @@ import { localPathHash } from "../../apps/runner/src/preservation/localPaths.js"
 import {
   decryptExport,
   generateRecoveryKey,
+  generateSigningKeyPair,
   unpackExport,
   verifyIntegrity,
 } from "@rea-web/recovery";
-import { Stack, stackUnavailableReason } from "./stack.js";
+import { REA_WEB_ROOT, Stack, stackUnavailableReason } from "./stack.js";
 
 const unavailable =
   stackUnavailableReason() ?? (HAS_DATABASE ? null : "no database");
@@ -44,6 +46,7 @@ describeStack("preserve workflow through the built API and runner", () => {
   let buildId = "";
   let captureId = "";
   const recoveryKey = generateRecoveryKey();
+  const signingKey = generateSigningKeyPair();
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), "rea-web-e2e-preserve-"));
@@ -70,8 +73,18 @@ describeStack("preserve workflow through the built API and runner", () => {
         mode: 0o600,
       },
     );
+    const signingDir = join(scratch, "signing");
+    await mkdir(signingDir, { mode: 0o700 });
+    await writeFile(
+      join(signingDir, `${signingKey.keyId}.pem`),
+      signingKey.privateKeyPem,
+      {
+        mode: 0o600,
+      },
+    );
     stack.startRunner(runner.json.token, {
       REA_WEB_RECOVERY_KEYS_DIR: keysDir,
+      REA_WEB_EXPORT_SIGNING_KEYS_DIR: signingDir,
       // Restore credentials are separate from the capture credential.
       REA_WEB_VERIFY_DATABASE_ADMIN_URL: fx.adminDatabaseUrl,
       REA_WEB_VERIFY_ALLOW_NETWORK: "registry",
@@ -264,6 +277,76 @@ describeStack("preserve workflow through the built API and runner", () => {
     const refused = await waitForJob(missingKey.json.job_id);
     expect(refused.state).toBe("failed");
     expect(refused.failure.message).toContain("not on this runner");
+  });
+
+  it("signs an export on the runner and the standalone verifier checks it before unpacking", async () => {
+    expect(captureId).not.toBe("");
+    const signed = await exportCapture({ sign_with_key_id: signingKey.keyId });
+    expect(signed.view.signature).toMatchObject({
+      format: "rea-web-export-signature",
+      algorithm: "ed25519",
+      public_key_id: signingKey.keyId,
+      archive_sha256: signed.view.sha256,
+    });
+    expect(JSON.stringify(signed.view)).not.toContain("PRIVATE KEY");
+    const dir = join(scratch, "signed");
+    await mkdir(dir);
+    const archive = join(dir, "export.tar");
+    await writeFile(archive, signed.bytes);
+    const sigPath = join(dir, "export.sig.json");
+    const {
+      object_key: _k,
+      sha256: _s,
+      size: _z,
+      ...document
+    } = signed.view.signature;
+    await writeFile(sigPath, JSON.stringify(document));
+    const publicKey = join(dir, "public.pem");
+    await writeFile(publicKey, signingKey.publicKeyPem);
+    const bundle = join(REA_WEB_ROOT, "apps/recover-cli/dist/rea-recover.mjs");
+    const run = (args: string[]) =>
+      spawnSync(process.execPath, [bundle, ...args], {
+        encoding: "utf8",
+        env: { PATH: process.env["PATH"] ?? "" },
+      });
+    const ok = run([
+      "verify",
+      archive,
+      "--archive-signature",
+      sigPath,
+      "--archive-key",
+      publicKey,
+    ]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).toContain("archive signature: verified");
+    // One flipped byte in the archive: refused before anything is unpacked.
+    const tampered = Buffer.from(signed.bytes);
+    tampered.writeUInt8((tampered.at(-1) ?? 0) ^ 0xff, tampered.length - 1);
+    const bad = join(dir, "tampered.tar");
+    await writeFile(bad, tampered);
+    const refused = run([
+      "verify",
+      bad,
+      "--archive-signature",
+      sigPath,
+      "--archive-key",
+      publicKey,
+    ]);
+    expect(refused.status).toBe(3);
+    expect(refused.stderr).toContain("archive digest does not match");
+    // A different key is refused too.
+    const other = join(dir, "other.pem");
+    await writeFile(other, generateSigningKeyPair().publicKeyPem);
+    expect(
+      run([
+        "verify",
+        archive,
+        "--archive-signature",
+        sigPath,
+        "--archive-key",
+        other,
+      ]).status,
+    ).toBe(3);
   });
 
   it("verifies the stored capture by restoring it into a disposable target and database", async () => {

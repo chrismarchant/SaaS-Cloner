@@ -1,7 +1,14 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { jobResultSchemas, type JobResult } from "@rea-web/contracts";
-import { encryptExport, packExport, type RecoveryKey } from "@rea-web/recovery";
+import { createHash } from "node:crypto";
+import {
+  encryptExport,
+  packExport,
+  signArchiveDigest,
+  signingKeyId,
+  type RecoveryKey,
+} from "@rea-web/recovery";
 import type { JobContext } from "../jobContext.js";
 import { downloadPackage } from "./package.js";
 
@@ -14,6 +21,8 @@ import { downloadPackage } from "./package.js";
 export interface ExportDeps {
   /** Directory of recovery keys (`<key id>.key`), outside every workspace. */
   readonly recoveryKeysDir: string | null;
+  /** Directory of Ed25519 signing keys (`<public key id>.pem`, PKCS#8). */
+  readonly signingKeysDir: string | null;
 }
 
 export class ExportRefusedError extends Error {
@@ -48,6 +57,34 @@ const loadRecoveryKey = async (
   return { keyBase64, keyId, keyPath };
 };
 
+const SIGNING_KEY_ID = /^[0-9a-f]{64}$/u;
+
+/** Private signing key for `keyId`; the file name and the key must agree. */
+const loadSigningKey = async (
+  deps: ExportDeps,
+  keyId: string,
+): Promise<string> => {
+  if (!SIGNING_KEY_ID.test(keyId))
+    throw new ExportRefusedError(
+      "sign_with_key_id must be the signing key's public key id (64 hex characters)",
+    );
+  if (deps.signingKeysDir === null)
+    throw new ExportRefusedError(
+      "signing requested but this runner has no REA_WEB_EXPORT_SIGNING_KEYS_DIR",
+    );
+  const pem = await readFile(
+    join(deps.signingKeysDir, `${keyId}.pem`),
+    "utf8",
+  ).catch(() => {
+    throw new ExportRefusedError(`signing key ${keyId} is not on this runner`);
+  });
+  if (signingKeyId(pem) !== keyId)
+    throw new ExportRefusedError(
+      `signing key file ${keyId}.pem holds a different key`,
+    );
+  return pem;
+};
+
 export const runRecoveryExport = async (
   ctx: JobContext,
   deps: ExportDeps,
@@ -58,10 +95,6 @@ export const runRecoveryExport = async (
   if (recipients.length > 1)
     throw new ExportRefusedError(
       "aes-256-gcm-envelope encrypts to exactly one recovery key; request one recipient",
-    );
-  if (ctx.job.input["sign_with_key_id"])
-    throw new ExportRefusedError(
-      "export signing is not available on this runner yet; sign the manifest at capture time",
     );
   if (ctx.job.input["include_secret_escrow"] === true)
     throw new ExportRefusedError(
@@ -92,6 +125,13 @@ export const runRecoveryExport = async (
         plaintext_sha256: packed.sha256,
       };
     }
+    const signKeyId =
+      typeof ctx.job.input["sign_with_key_id"] === "string"
+        ? ctx.job.input["sign_with_key_id"]
+        : null;
+    // Load the key before uploading anything, so a missing key fails early.
+    const signingKey =
+      signKeyId === null ? null : await loadSigningKey(deps, signKeyId);
     const uploaded = await ctx.client.uploadArtifact(
       ctx.job.id,
       ctx.fencingToken,
@@ -102,8 +142,32 @@ export const runRecoveryExport = async (
       { path: uploadPath },
     );
     ctx.usage.addArtifactBytes(uploaded.size);
+    let signature: JobResult<"recovery.export">["export"]["signature"] = null;
+    if (signingKey !== null) {
+      // Sign what is distributed: the uploaded (possibly encrypted) archive.
+      const digest = createHash("sha256")
+        .update(await readFile(uploadPath))
+        .digest("hex");
+      if (digest !== uploaded.sha256)
+        throw new Error("uploaded archive digest differs from the local file");
+      const document = signArchiveDigest(digest, signingKey);
+      const body = `${JSON.stringify(document, null, 2)}\n`;
+      const sig = await ctx.client.uploadArtifact(
+        ctx.job.id,
+        ctx.fencingToken,
+        { kind: "export_signature", name: "export.sig.json" },
+        { body },
+      );
+      // The signature is public; the result carries the whole document.
+      signature = {
+        ...document,
+        object_key: sig.object_key,
+        sha256: sig.sha256,
+        size: sig.size,
+      };
+    }
     return jobResultSchemas["recovery.export"].parse({
-      export: { signature: null, encryption },
+      export: { signature, encryption },
     });
   } finally {
     for (const path of [packageDir, tarPath, encryptedPath])

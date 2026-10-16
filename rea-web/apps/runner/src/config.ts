@@ -19,6 +19,8 @@ export interface RunnerConfig {
   readonly verifierBundlePath: string | null;
   /** Recovery keys (`<key id>.key`, base64) for encrypted exports; never uploaded. */
   readonly recoveryKeysDir: string | null;
+  /** Ed25519 signing keys (`<public key id>.pem`) for signed exports; never uploaded. */
+  readonly exportSigningKeysDir: string | null;
   /** Restore-only admin URL of a disposable PostgreSQL server (never a capture credential). */
   readonly verifyDatabaseAdminUrl: string | null;
   /** Network classes restore steps may use during verification. */
@@ -140,6 +142,9 @@ export const parseRunnerConfig = (
         return value;
       },
     ),
+    exportSigningKeysDir: env["REA_WEB_EXPORT_SIGNING_KEYS_DIR"]
+      ? resolve(env["REA_WEB_EXPORT_SIGNING_KEYS_DIR"])
+      : null,
     recoveryKeysDir: env["REA_WEB_RECOVERY_KEYS_DIR"]
       ? resolve(env["REA_WEB_RECOVERY_KEYS_DIR"])
       : null,
