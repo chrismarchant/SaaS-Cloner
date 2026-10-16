@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import type { exportSchema } from "@rea-web/contracts/browser";
 import type { z } from "zod";
 import {
+  downloadExportSignatureUrl,
   downloadExportUrl,
   useCreateRecoveryExport,
   useManifest,
@@ -12,13 +13,17 @@ import { useProject } from "../../api/project";
 import { Badge } from "../../components/Badge";
 import { CopyButton } from "../../components/CopyButton";
 import { ErrorNotice } from "../../components/ErrorNotice";
-import { TextAreaField } from "../../components/Fields";
+import { TextAreaField, TextField } from "../../components/Fields";
 import { JobPanel } from "../../components/JobPanel";
 import { JsonExplorer } from "../../components/JsonTree";
 import {
+  SIGNING_KEY_ID,
+  VERIFY_ARCHIVE_COMMAND,
   parseRecipients,
   readEncryption,
+  readSignature,
   type EncryptionView,
+  type SignatureView,
 } from "../../lib/exportView";
 import { formatBytes, formatTimestamp, safeFileName } from "../../lib/format";
 import { restoreCommands } from "../../lib/restoreCommands";
@@ -33,8 +38,11 @@ export function ExportNewPage() {
   const create = useCreateRecoveryExport(project.id, b, c);
   const [encrypted, setEncrypted] = useState(false);
   const [recipients, setRecipients] = useState("");
+  const [signKeyId, setSignKeyId] = useState("");
   const base = `/preserve/builds/${b}/captures/${c}`;
   const ids = parseRecipients(recipients);
+  const signing = signKeyId.trim();
+  const signingInvalid = signing !== "" && !SIGNING_KEY_ID.test(signing);
   if (!canWrite) return <p>Exporting needs the member role.</p>;
   return (
     <>
@@ -55,10 +63,16 @@ export function ExportNewPage() {
         className="stack"
         onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(encrypted ? { encrypt_to_recipients: ids } : {}, {
-            onSuccess: (created) =>
-              navigate(`/preserve/builds/${b}/exports/${created.id}`),
-          });
+          create.mutate(
+            {
+              ...(encrypted ? { encrypt_to_recipients: ids } : {}),
+              ...(signing === "" ? {} : { sign_with_key_id: signing }),
+            },
+            {
+              onSuccess: (created) =>
+                navigate(`/preserve/builds/${b}/exports/${created.id}`),
+            },
+          );
         }}
       >
         <fieldset>
@@ -104,9 +118,27 @@ export function ExportNewPage() {
             </div>
           </>
         )}
+        <TextField
+          label="Sign with key id (optional)"
+          mono
+          value={signKeyId}
+          spellCheck={false}
+          autoComplete="off"
+          onValue={setSignKeyId}
+          help="64 lowercase hex characters: the id of the signing key's public key. The private key must already be on the runner, in the directory named by REA_WEB_EXPORT_SIGNING_KEYS_DIR as <key id>.pem. If it is not there the export job fails; it does not fall back to an unsigned export. The key is never sent to or stored by this service."
+        />
+        {signingInvalid && (
+          <p className="notice notice-warn" role="alert">
+            A key id is 64 lowercase hex characters.
+          </p>
+        )}
         <button
           type="submit"
-          disabled={create.isPending || (encrypted && ids.length === 0)}
+          disabled={
+            create.isPending ||
+            signingInvalid ||
+            (encrypted && ids.length === 0)
+          }
         >
           Start export
         </button>
@@ -149,6 +181,95 @@ function EncryptionFacts({ encryption }: { encryption: EncryptionView }) {
         <dd>{encryption.keyLocation}</dd>
       </div>
     </dl>
+  );
+}
+
+function SignatureFacts({
+  signature,
+  projectId,
+  b,
+  exportId,
+}: {
+  signature: SignatureView;
+  projectId: string;
+  b: string;
+  exportId: string;
+}) {
+  if (signature.state === "unsigned")
+    return <p data-testid="export-signature">Not signed.</p>;
+  if (signature.state === "unrecognised")
+    return (
+      <div data-testid="export-signature">
+        <p className="notice notice-warn">
+          The signature record does not match the signature format; it is shown
+          as stored.
+        </p>
+        <JsonExplorer value={signature.raw} label="signature" />
+      </div>
+    );
+  const verify = VERIFY_ARCHIVE_COMMAND;
+  return (
+    <div data-testid="export-signature">
+      <dl className="facts">
+        <div className="fact">
+          <dt>Algorithm</dt>
+          <dd>{signature.algorithm}</dd>
+        </div>
+        <div className="fact">
+          <dt>Public key id</dt>
+          <dd>
+            <code className="break" data-testid="signature-key-id">
+              {signature.publicKeyId}
+            </code>
+          </dd>
+        </div>
+        <div className="fact">
+          <dt>Signed archive SHA-256</dt>
+          <dd>
+            <code className="break" data-testid="signature-archive-sha256">
+              {signature.archiveSha256}
+            </code>
+            <br />
+            <span className="help-text">
+              {signature.signsRecordedArchive === null
+                ? "No archive digest is recorded to compare it with."
+                : signature.signsRecordedArchive
+                  ? "Matches the recorded archive digest."
+                  : "Does not match the recorded archive digest."}
+            </span>
+          </dd>
+        </div>
+        <div className="fact">
+          <dt>Signed at</dt>
+          <dd data-testid="signature-signed-at">
+            {formatTimestamp(signature.signedAt)}
+          </dd>
+        </div>
+      </dl>
+      <p>
+        <a
+          className="button"
+          href={downloadExportSignatureUrl(projectId, b, exportId)}
+          download={safeFileName(
+            `recovery-${exportId}.sig.json`,
+            "recovery-export.sig.json",
+          )}
+          data-testid="signature-download"
+        >
+          Download the signature
+        </a>
+      </p>
+      <h4>Verify the download</h4>
+      <p>
+        The signature covers the archive file as distributed, encrypted or not.
+        Check it with the signer&apos;s public key, which you hold; this service
+        does not provide one.
+      </p>
+      <code className="code-line" data-testid="cmd-verify">
+        {verify}
+      </code>
+      <CopyButton value={verify} label="Copy verify command" />
+    </div>
   );
 }
 
@@ -216,6 +337,7 @@ export function ExportPage() {
   if (record.isError) return <ErrorNotice error={record.error} />;
   const data = record.data;
   const encryption = readEncryption(data.encryption);
+  const signature = readSignature(data.signature, data.sha256);
   const done = data.status === "completed";
   return (
     <>
@@ -276,17 +398,14 @@ export function ExportPage() {
                   : `${formatBytes(data.size)} (${data.size} bytes)`}
               </dd>
             </div>
-            <div className="fact">
-              <dt>Signature</dt>
-              <dd>
-                {data.signature === null ? (
-                  "not signed"
-                ) : (
-                  <JsonExplorer value={data.signature} label="signature" />
-                )}
-              </dd>
-            </div>
           </dl>
+          <h3>Signature</h3>
+          <SignatureFacts
+            signature={signature}
+            projectId={project.id}
+            b={b}
+            exportId={data.id}
+          />
           <h3>Encryption</h3>
           <EncryptionFacts encryption={encryption} />
           <p>

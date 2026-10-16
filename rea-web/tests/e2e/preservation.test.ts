@@ -14,6 +14,7 @@ import {
   captureSchema,
   preservationPlanSchema,
   recoveryManifestSchema,
+  restoreReportSchema,
 } from "@rea-web/contracts";
 import {
   createFixtureBuild,
@@ -200,6 +201,23 @@ describeStack("preserve workflow through the built API and runner", () => {
       true,
     );
     expect(manifest.files.some((f) => f.path.endsWith("dump.pgc"))).toBe(true);
+    // The list routes find what was just created, and coverage comes from the manifest.
+    const listed = async (path: string) =>
+      (
+        await stack.request(
+          "GET",
+          `/projects/${project}/builds/${build.json.id}/${path}`,
+        )
+      ).json.items.map((item: { id: string }) => item.id);
+    expect(await listed("plans")).toEqual([planned.json.plan_id]);
+    expect(await listed("captures")).toEqual([captured.json.id]);
+    const coverage = await stack.request(
+      "GET",
+      `/projects/${project}/builds/${build.json.id}/captures/${captured.json.id}/coverage`,
+    );
+    expect(coverage.json.missing_or_blocked).toEqual(
+      manifest.missing_or_blocked,
+    );
     // Neither the fixture secret nor the database password left the runner.
     for (const text of [
       manifestResponse.text,
@@ -384,6 +402,23 @@ describeStack("preserve workflow through the built API and runner", () => {
       behavior: "behavior_verified",
     });
     expect(verification.overall).toBe("behavior_verified");
+    expect(verification.status).toBe("completed");
+    const report = await stack.request(
+      "GET",
+      `/projects/${project}/builds/${buildId}/captures/${captureId}/verifications/${created.json.id}/report`,
+    );
+    expect(report.status, report.text).toBe(200);
+    expect(restoreReportSchema.parse(report.json).overall).toBe(
+      "behavior_verified",
+    );
+    expect(report.text).not.toContain(fx.databasePassword);
+    const verifications = await stack.request(
+      "GET",
+      `/projects/${project}/builds/${buildId}/captures/${captureId}/verifications`,
+    );
+    expect(
+      verifications.json.items.map((item: { id: string }) => item.id),
+    ).toEqual([created.json.id]);
     // A registry step (npm ci) was needed, so the package is not network-free.
     expect(verification.network_required.verdict).toBe("yes");
     for (const text of [

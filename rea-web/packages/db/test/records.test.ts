@@ -508,4 +508,101 @@ describeDb("job support and domain record repositories", () => {
       1,
     );
   });
+  it("pages captures and exports newest first, scoped to the build and optionally one capture", async () => {
+    const { repos } = t;
+    const { user, project } = await seedProject(repos);
+    const job = (kind: "preservation.capture" | "recovery.export") =>
+      repos.jobs.create(jobInput(project.id, { kind }));
+    const newBuild = () =>
+      repos.builds.create({
+        project_id: project.id,
+        name: "app",
+        source: {},
+        components: [],
+        created_by: user.id,
+      });
+    const build = await newBuild();
+    const otherBuild = await newBuild();
+    const plan = async (b: string) =>
+      repos.plans.create({
+        build_id: b,
+        job_id: (await repos.jobs.create(jobInput(project.id))).id,
+      });
+    const plans = [await plan(build.id), await plan(otherBuild.id)];
+    const capture = async (planIndex: number) =>
+      repos.captures.create({
+        build_id: (planIndex === 0 ? build : otherBuild).id,
+        plan_id: plans[planIndex]?.id ?? "",
+        job_id: (await job("preservation.capture")).id,
+      });
+    const captures = [await capture(0), await capture(0), await capture(0)];
+    const foreign = await capture(1);
+
+    const first = await repos.captures.pageByBuild(build.id, { limit: 2 });
+    expect(first.items.map((c) => c.id)).toEqual([
+      captures[2]?.id,
+      captures[1]?.id,
+    ]);
+    expect(first.next_cursor).toEqual(expect.any(String));
+    const second = await repos.captures.pageByBuild(build.id, {
+      limit: 2,
+      cursor: first.next_cursor ?? "",
+    });
+    expect(second.items.map((c) => c.id)).toEqual([captures[0]?.id]);
+    expect(second.next_cursor).toBeNull();
+    expect(
+      (await repos.captures.pageByBuild(otherBuild.id)).items.map((c) => c.id),
+    ).toEqual([foreign.id]);
+    await expect(
+      repos.captures.pageByBuild(build.id, { cursor: "bm90LWEtdXVpZA" }),
+    ).rejects.toMatchObject({ code: "validation_failed" });
+    await expect(
+      repos.captures.pageByBuild(build.id, { cursor: "!!" }),
+    ).rejects.toMatchObject({ code: "validation_failed" });
+
+    const exp = async (c: string) =>
+      repos.exports.create({
+        capture_id: c,
+        job_id: (await job("recovery.export")).id,
+      });
+    const exports = [
+      await exp(captures[0]?.id ?? ""),
+      await exp(captures[1]?.id ?? ""),
+      await exp(captures[0]?.id ?? ""),
+    ];
+    const foreignExport = await exp(foreign.id);
+    expect(
+      (await repos.exports.listByBuild(build.id)).items.map((e) => e.id),
+    ).toEqual([exports[2]?.id, exports[1]?.id, exports[0]?.id]);
+    const filtered = await repos.exports.listByBuild(build.id, {
+      capture_id: captures[0]?.id,
+      limit: 1,
+    });
+    expect(filtered.items.map((e) => e.id)).toEqual([exports[2]?.id]);
+    expect(
+      (
+        await repos.exports.listByBuild(build.id, {
+          capture_id: captures[0]?.id,
+          cursor: filtered.next_cursor ?? "",
+        })
+      ).items.map((e) => e.id),
+    ).toEqual([exports[0]?.id]);
+    // A capture of another build matches nothing.
+    expect(
+      (await repos.exports.listByBuild(build.id, { capture_id: foreign.id }))
+        .items,
+    ).toEqual([]);
+    expect(
+      (await repos.exports.listByBuild(otherBuild.id)).items.map((e) => e.id),
+    ).toEqual([foreignExport.id]);
+  });
+
+  it("loads the jobs that exist among a set of ids", async () => {
+    const { project } = await seedProject(t.repos);
+    const a = await t.repos.jobs.create(jobInput(project.id));
+    const b = await t.repos.jobs.create(jobInput(project.id));
+    const found = await t.repos.jobs.listByIds([a.id, uuidv7(), b.id]);
+    expect(found.map((j) => j.id).sort()).toEqual([a.id, b.id].sort());
+    expect(await t.repos.jobs.listByIds([])).toEqual([]);
+  });
 });

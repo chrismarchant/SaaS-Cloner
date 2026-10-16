@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   COMPONENT_KINDS,
   VERIFICATION_STATUSES,
-  type Job,
 } from "@rea-web/contracts/browser";
 import {
   bodyFromDraft,
@@ -14,8 +13,14 @@ import {
   type BuildDraft,
 } from "../src/lib/buildDraft";
 import { describeComponent, describeSource } from "../src/lib/buildView";
-import { jobsWhere, producedId } from "../src/lib/buildJobs";
-import { parseRecipients, readEncryption } from "../src/lib/exportView";
+import {
+  SIGNING_KEY_ID,
+  VERIFY_ARCHIVE_COMMAND,
+  parseRecipients,
+  readEncryption,
+  readSignature,
+} from "../src/lib/exportView";
+import { parseRestoreReport, stepSummaries } from "../src/lib/reportView";
 import {
   filterFiles,
   imageLabel,
@@ -537,24 +542,157 @@ describe("export records", () => {
   });
 });
 
-describe("job lookup and windowing", () => {
-  const job = (id: string, created: string, input: Record<string, unknown>) =>
-    ({ id, created_at: created, input }) as unknown as Job;
+describe("export signatures", () => {
+  const summary = {
+    format: "rea-web-export-signature",
+    version: 1,
+    algorithm: "ed25519",
+    public_key_id: HASH_A,
+    archive_sha256: HASH_B,
+    signed_at: "2026-10-12T00:00:00.000Z",
+    object_key: "projects/p/builds/b/exports/e.tar.sig",
+    sha256: HASH_A,
+    size: 300,
+  };
 
-  it("finds the jobs of one resource, newest first, by their input", () => {
-    const jobs = [
-      job("1", "2026-01-01", { build_id: "b1", plan_id: "p1" }),
-      job("2", "2026-01-03", { build_id: "b1", plan_id: "p2" }),
-      job("3", "2026-01-02", { build_id: "b2", plan_id: "p3" }),
-    ];
-    expect(jobsWhere(jobs, "build_id", "b1").map((j) => j.id)).toEqual([
-      "2",
-      "1",
-    ]);
-    expect(producedId(jobs[1] as Job, "plan_id")).toBe("p2");
-    expect(producedId(jobs[1] as Job, "capture_id")).toBeNull();
+  it("reads the runner's summary and compares the signed digest with the recorded one", () => {
+    expect(readSignature(null, HASH_B)).toEqual({ state: "unsigned" });
+    expect(readSignature(summary, HASH_B)).toEqual({
+      state: "signed",
+      algorithm: "ed25519",
+      publicKeyId: HASH_A,
+      archiveSha256: HASH_B,
+      signedAt: "2026-10-12T00:00:00.000Z",
+      signsRecordedArchive: true,
+    });
+    expect(readSignature(summary, HASH_A)).toMatchObject({
+      signsRecordedArchive: false,
+    });
+    expect(readSignature(summary, null)).toMatchObject({
+      signsRecordedArchive: null,
+    });
   });
 
+  it("shows a record it does not recognise as stored, and never as signed", () => {
+    const raw = { ...summary, algorithm: "rsa" };
+    expect(readSignature(raw, HASH_B)).toEqual({ state: "unrecognised", raw });
+    expect(readSignature({ object_key: "k" }, null).state).toBe("unrecognised");
+  });
+
+  it("accepts only 64 lowercase hex characters as a key id", () => {
+    expect(SIGNING_KEY_ID.test(HASH_A)).toBe(true);
+    expect(SIGNING_KEY_ID.test("A".repeat(64))).toBe(false);
+    expect(SIGNING_KEY_ID.test("a".repeat(63))).toBe(false);
+  });
+
+  it("names arguments only in the verify command", () => {
+    expect(VERIFY_ARCHIVE_COMMAND).toBe(
+      "rea-recover verify <archive> --archive-signature <sig.json> --archive-key <public.pem>",
+    );
+    expect(VERIFY_ARCHIVE_COMMAND).not.toMatch(/:\/\//u);
+  });
+});
+
+describe("restore reports", () => {
+  const step = (over: Record<string, unknown>) => ({
+    component_id: "source:main",
+    step_id: "clone",
+    title: "Clone",
+    argv: ["git", "clone"],
+    cwd: "{{target}}",
+    network: "none",
+    network_isolated: true,
+    status: "passed",
+    exit_code: 0,
+    signal: null,
+    timed_out: false,
+    duration_ms: 12,
+    stdout_tail: "",
+    stderr_tail: "",
+    ...over,
+  });
+  const report = (scopes: unknown[]) => ({
+    format: "rea-web-recovery-report",
+    format_version: 1,
+    package_id: "pkg",
+    manifest_sha256: HASH_A,
+    started_at: "2026-10-12T00:00:00.000Z",
+    finished_at: "2026-10-12T00:00:01.000Z",
+    verifier: {
+      name: "rea-recover",
+      version: "1",
+      node: "v22",
+      platform: "linux",
+    },
+    network_isolation: {
+      mechanism: "linux-network-namespace",
+      available: true,
+      detail: "",
+    },
+    guards: {
+      blocked_hosts: [],
+      database_host: null,
+      disabled_schedules: [],
+      disabled_webhooks: [],
+    },
+    scopes,
+    network_required: { verdict: "no", reasons: [] },
+    overall: "clean_build_verified",
+  });
+
+  it("summarises each step's id, status, exit code and isolation, in order", () => {
+    const parsed = parseRestoreReport(
+      report([
+        {
+          scope: "clean_build",
+          status: "clean_build_verified",
+          detail: "ok",
+          performed_at: "2026-10-12T00:00:00.500Z",
+          steps: [
+            step({}),
+            step({
+              step_id: "install",
+              status: "blocked",
+              exit_code: null,
+              network_isolated: false,
+            }),
+          ],
+        },
+        {
+          scope: "integrity",
+          status: "integrity_verified",
+          detail: "",
+          performed_at: "2026-10-12T00:00:00.100Z",
+        },
+      ]),
+    );
+    if (!parsed.ok) throw new Error(parsed.issues.join("; "));
+    expect(stepSummaries(parsed.report)).toEqual([
+      {
+        scope: "clean_build",
+        stepId: "clone",
+        status: "passed",
+        exitCode: 0,
+        networkIsolated: true,
+      },
+      {
+        scope: "clean_build",
+        stepId: "install",
+        status: "blocked",
+        exitCode: null,
+        networkIsolated: false,
+      },
+    ]);
+  });
+
+  it("does not summarise a report that fails the contract schema", () => {
+    const parsed = parseRestoreReport({ format: "something-else" });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.issues.length).toBeGreaterThan(0);
+  });
+});
+
+describe("windowing", () => {
   it("renders only the rows near the viewport", () => {
     expect(
       virtualWindow({

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { preservationPlanSchema } from "@rea-web/contracts/browser";
 import type { z } from "zod";
 import {
@@ -176,7 +176,16 @@ export function PlanPage() {
   const { project } = useProject();
   const plan = usePlan(project.id, b, pl);
   const waiting = planNotReady(plan.error);
-  const jobId = plan.data?.job_id ?? waiting?.jobId ?? null;
+  // The job id createPlan answered with, until the plan itself names it.
+  const created: unknown = useLocation().state;
+  const createdJobId =
+    typeof created === "object" &&
+    created !== null &&
+    "jobId" in created &&
+    typeof created.jobId === "string"
+      ? created.jobId
+      : null;
+  const jobId = plan.data?.job_id ?? waiting?.jobId ?? createdJobId;
   return (
     <>
       <Crumbs

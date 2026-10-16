@@ -1,14 +1,28 @@
-import { ApiError, uuidv7 } from "@rea-web/contracts";
-import type { BuildRecord, CaptureRecord, PlanRecord } from "@rea-web/db";
+import {
+  ApiError,
+  exportSignatureSummarySchema,
+  uuidv7,
+  validateRelativePath,
+  verificationSchema,
+} from "@rea-web/contracts";
+import type {
+  BuildRecord,
+  CaptureRecord,
+  JobRecord,
+  PlanRecord,
+} from "@rea-web/db";
 import type { AppContext } from "../context.js";
+import { exportArchiveKey, verificationPrefix } from "./artifacts.js";
 import {
   buildView,
   captureView,
   exportView,
   jobSummaryView,
   planView,
+  runStatusFromJob,
   verificationView,
 } from "./mappers.js";
+import { readStoredManifest } from "./storedManifest.js";
 import { sendObject } from "./streaming.js";
 import type { HandlersFor } from "./types.js";
 import { createJob, resolvePreferredRunner } from "./jobsupport.js";
@@ -35,25 +49,54 @@ const loadCapture = async (
   return capture;
 };
 
-/** Accepts the plan id or the id of the job that produces it (what createPlan returns). */
 const loadPlan = async (
   ctx: AppContext,
   projectId: string,
   buildId: string,
-  idOrJobId: string,
+  planId: string,
 ): Promise<PlanRecord> => {
-  let plan = await ctx.repos.plans.findById(projectId, idOrJobId);
-  if (plan === null) {
-    const byJob = await ctx.repos.plans.findByJobId(idOrJobId);
-    if (
-      byJob !== null &&
-      (await ctx.repos.builds.findById(projectId, byJob.build_id)) !== null
-    )
-      plan = byJob;
-  }
+  const plan = await ctx.repos.plans.findById(projectId, planId);
   if (plan === null || plan.build_id !== buildId)
     throw new ApiError("not_found", "Plan not found");
   return plan;
+};
+
+/** The jobs behind a page of resources, in one query. */
+const jobsOf = async (
+  ctx: AppContext,
+  records: readonly { readonly job_id: string }[],
+): Promise<(id: string) => JobRecord | null> => {
+  const jobs = await ctx.repos.jobs.listByIds(records.map((r) => r.job_id));
+  const byId = new Map(jobs.map((job) => [job.id, job]));
+  return (id) => byId.get(id) ?? null;
+};
+
+const loadVerification = async (
+  ctx: AppContext,
+  projectId: string,
+  captureId: string,
+  verificationId: string,
+) => {
+  const verification = await ctx.repos.verifications.findById(
+    projectId,
+    verificationId,
+  );
+  if (verification === null || verification.capture_id !== captureId)
+    throw new ApiError("not_found", "Verification not found");
+  return verification;
+};
+
+const loadExport = async (
+  ctx: AppContext,
+  projectId: string,
+  buildId: string,
+  exportId: string,
+) => {
+  await loadBuild(ctx, projectId, buildId);
+  const record = await ctx.repos.exports.findById(projectId, exportId);
+  if (record === null) throw new ApiError("not_found", "Export not found");
+  await loadCapture(ctx, projectId, buildId, record.capture_id);
+  return record;
 };
 
 const requireSucceededCapture = async (
@@ -73,16 +116,22 @@ export const buildHandlers = (): HandlersFor<
   | "listBuilds"
   | "getBuild"
   | "createPlan"
+  | "listPlans"
   | "getPlan"
   | "createCapture"
+  | "listCaptures"
   | "getCapture"
   | "getCaptureManifest"
   | "getCaptureCoverage"
   | "createVerification"
+  | "listVerifications"
   | "getVerification"
+  | "downloadVerificationReport"
   | "createExport"
+  | "listExports"
   | "getExport"
   | "downloadExport"
+  | "downloadExportSignature"
 > => ({
   async createBuild({ ctx, user, params, body }) {
     const preferred = await resolvePreferredRunner(
@@ -141,7 +190,20 @@ export const buildHandlers = (): HandlersFor<
       );
       return created;
     });
-    return { ...jobSummaryView(job), plan_id: planId };
+    return { ...jobSummaryView(job), plan_id: planId, job_id: job.id };
+  },
+
+  async listPlans({ ctx, params, query }) {
+    await loadBuild(ctx, params.p, params.b);
+    const page = await ctx.repos.plans.listByBuild(params.b, {
+      cursor: query.cursor,
+      limit: query.limit,
+    });
+    const job = await jobsOf(ctx, page.items);
+    return {
+      items: page.items.map((plan) => planView(plan, job(plan.job_id))),
+      next_cursor: page.next_cursor,
+    };
   },
 
   async getPlan({ ctx, params }) {
@@ -155,7 +217,7 @@ export const buildHandlers = (): HandlersFor<
         job_state: job?.state ?? null,
       });
     }
-    return planView(plan);
+    return planView(plan, await ctx.repos.jobs.findById(plan.job_id));
   },
 
   async createCapture({ ctx, req, user, params, body }) {
@@ -199,6 +261,21 @@ export const buildHandlers = (): HandlersFor<
     return captureView(capture, job);
   },
 
+  async listCaptures({ ctx, params, query }) {
+    await loadBuild(ctx, params.p, params.b);
+    const page = await ctx.repos.captures.pageByBuild(params.b, {
+      cursor: query.cursor,
+      limit: query.limit,
+    });
+    const job = await jobsOf(ctx, page.items);
+    return {
+      items: page.items.map((capture) =>
+        captureView(capture, job(capture.job_id)),
+      ),
+      next_cursor: page.next_cursor,
+    };
+  },
+
   async getCapture({ ctx, params }) {
     const capture = await loadCapture(ctx, params.p, params.b, params.c);
     return captureView(capture, await ctx.repos.jobs.findById(capture.job_id));
@@ -218,17 +295,19 @@ export const buildHandlers = (): HandlersFor<
 
   async getCaptureCoverage({ ctx, params }) {
     const capture = await loadCapture(ctx, params.p, params.b, params.c);
+    // Reasons and remediation belong to the stored manifest; without it the
+    // list of what is missing is unknown, not empty.
+    if (capture.manifest_object_key === null)
+      throw new ApiError("conflict", "The capture has no manifest yet", {
+        reason: "manifest_not_ready",
+      });
+    const manifest = await readStoredManifest(ctx, capture.manifest_object_key);
     const components: Record<string, string> = {};
-    const missing: Array<Record<string, unknown>> = [];
-    for (const [id, status] of Object.entries(capture.component_statuses)) {
-      const value = String(status);
-      components[id] = value;
-      if (value !== "captured")
-        missing.push({ component_id: id, status: value });
-    }
+    for (const [id, status] of Object.entries(capture.component_statuses))
+      components[id] = String(status);
     return {
       components,
-      missing_or_blocked: missing,
+      missing_or_blocked: manifest.missing_or_blocked,
       consistency: capture.consistency,
     };
   },
@@ -242,47 +321,118 @@ export const buildHandlers = (): HandlersFor<
       build.preferred_runner_id;
     const verificationId = uuidv7();
     const jobId = uuidv7();
-    const verification = await ctx.db.withTransaction(async (client) => {
-      await createJob(
-        ctx,
-        req,
-        user,
-        {
-          id: jobId,
-          project_id: params.p,
-          kind: "recovery.verify",
-          input: {
-            build_id: build.id,
-            capture_id: capture.id,
-            verification_id: verificationId,
-            scope: body.scope,
+    const { verification, job } = await ctx.db.withTransaction(
+      async (client) => {
+        const created = await createJob(
+          ctx,
+          req,
+          user,
+          {
+            id: jobId,
+            project_id: params.p,
+            kind: "recovery.verify",
+            input: {
+              build_id: build.id,
+              capture_id: capture.id,
+              verification_id: verificationId,
+              scope: body.scope,
+            },
+            preferred_runner_id: preferred,
           },
-          preferred_runner_id: preferred,
-        },
-        client,
-      );
-      return ctx.repos.verifications.create(
-        {
-          id: verificationId,
-          capture_id: capture.id,
-          job_id: jobId,
-          scope: { scopes: body.scope },
-        },
-        client,
-      );
+          client,
+        );
+        const row = await ctx.repos.verifications.create(
+          {
+            id: verificationId,
+            capture_id: capture.id,
+            job_id: jobId,
+            scope: { scopes: body.scope },
+          },
+          client,
+        );
+        return { verification: row, job: created };
+      },
+    );
+    return verificationView(verification, job);
+  },
+
+  async listVerifications({ ctx, params, query }) {
+    await loadBuild(ctx, params.p, params.b);
+    const capture = await loadCapture(ctx, params.p, params.b, params.c);
+    const page = await ctx.repos.verifications.listByCapture(capture.id, {
+      cursor: query.cursor,
+      limit: query.limit,
     });
-    return verificationView(verification);
+    const job = await jobsOf(ctx, page.items);
+    return {
+      items: page.items.map((v) => verificationView(v, job(v.job_id))),
+      next_cursor: page.next_cursor,
+    };
   },
 
   async getVerification({ ctx, params }) {
     const capture = await loadCapture(ctx, params.p, params.b, params.c);
-    const verification = await ctx.repos.verifications.findById(
+    const verification = await loadVerification(
+      ctx,
       params.p,
+      capture.id,
       params.v,
     );
-    if (verification === null || verification.capture_id !== capture.id)
-      throw new ApiError("not_found", "Verification not found");
-    return verificationView(verification);
+    return verificationView(
+      verification,
+      await ctx.repos.jobs.findById(verification.job_id),
+    );
+  },
+
+  async downloadVerificationReport({ ctx, params, reply }) {
+    const capture = await loadCapture(ctx, params.p, params.b, params.c);
+    const verification = await loadVerification(
+      ctx,
+      params.p,
+      capture.id,
+      params.v,
+    );
+    const status = runStatusFromJob(
+      await ctx.repos.jobs.findById(verification.job_id),
+    );
+    if (status === "pending" || status === "running")
+      throw new ApiError("conflict", "The verification has not finished", {
+        reason: "report_not_ready",
+        job_id: verification.job_id,
+        status,
+      });
+    // The runner records where it uploaded the report on each result.
+    const keys = new Set(
+      verificationSchema.shape.results
+        .parse(verification.results)
+        .flatMap((result) =>
+          result.evidence_object_key === null
+            ? []
+            : [result.evidence_object_key],
+        ),
+    );
+    if (keys.size === 0)
+      throw new ApiError("not_found", "The verification has no report", {
+        reason: "report_not_found",
+        status,
+      });
+    const prefix = `${verificationPrefix(params.p, params.b, capture.id, verification.id)}/`;
+    const [key] = [...keys];
+    const relative = key?.startsWith(prefix) ? key.slice(prefix.length) : null;
+    if (
+      keys.size !== 1 ||
+      key === undefined ||
+      relative === null ||
+      !validateRelativePath(relative).ok
+    )
+      throw new ApiError("not_found", "The verification has no report", {
+        reason: "report_not_found",
+        status,
+      });
+    return sendObject(ctx, reply, key, {
+      contentType: "application/json; charset=utf-8",
+      filename: `restore-report-${verification.id}.json`,
+    });
   },
 
   async createExport({ ctx, req, user, params, body }) {
@@ -321,19 +471,59 @@ export const buildHandlers = (): HandlersFor<
     return exportView(record, job);
   },
 
-  async getExport({ ctx, params }) {
+  async listExports({ ctx, params, query }) {
     await loadBuild(ctx, params.p, params.b);
-    const record = await ctx.repos.exports.findById(params.p, params.e);
-    if (record === null) throw new ApiError("not_found", "Export not found");
-    await loadCapture(ctx, params.p, params.b, record.capture_id);
+    if (query.capture_id !== undefined)
+      await loadCapture(ctx, params.p, params.b, query.capture_id);
+    const page = await ctx.repos.exports.listByBuild(params.b, {
+      cursor: query.cursor,
+      limit: query.limit,
+      capture_id: query.capture_id,
+    });
+    const job = await jobsOf(ctx, page.items);
+    return {
+      items: page.items.map((e) => exportView(e, job(e.job_id))),
+      next_cursor: page.next_cursor,
+    };
+  },
+
+  async getExport({ ctx, params }) {
+    const record = await loadExport(ctx, params.p, params.b, params.e);
     return exportView(record, await ctx.repos.jobs.findById(record.job_id));
   },
 
+  async downloadExportSignature({ ctx, params, reply }) {
+    const record = await loadExport(ctx, params.p, params.b, params.e);
+    const status = exportView(
+      record,
+      await ctx.repos.jobs.findById(record.job_id),
+    ).status;
+    if (status === "pending" || status === "running")
+      throw new ApiError("conflict", "The export has not finished", {
+        reason: "signature_not_ready",
+        job_id: record.job_id,
+        status,
+      });
+    const stored = exportSignatureSummarySchema
+      .pick({ object_key: true, sha256: true, size: true })
+      .safeParse(record.signature);
+    // Only the object the API itself recorded beside this export's archive.
+    const expected = `${exportArchiveKey(params.p, params.b, record.id)}.sig`;
+    if (!stored.success || stored.data.object_key !== expected)
+      throw new ApiError("not_found", "The export is not signed", {
+        reason: "not_signed",
+        status,
+      });
+    return sendObject(ctx, reply, expected, {
+      contentType: "application/json; charset=utf-8",
+      filename: `${record.id}.tar.sig.json`,
+      sha256: stored.data.sha256,
+      size: stored.data.size,
+    });
+  },
+
   async downloadExport({ ctx, params, reply }) {
-    await loadBuild(ctx, params.p, params.b);
-    const record = await ctx.repos.exports.findById(params.p, params.e);
-    if (record === null) throw new ApiError("not_found", "Export not found");
-    await loadCapture(ctx, params.p, params.b, record.capture_id);
+    const record = await loadExport(ctx, params.p, params.b, params.e);
     if (record.object_key === null)
       throw new ApiError("conflict", "The export is not ready", {
         reason: "export_not_ready",

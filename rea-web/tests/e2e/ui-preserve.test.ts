@@ -26,6 +26,7 @@ import {
   type Page,
 } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { captureCoverageSchema, restoreReportSchema } from "@rea-web/contracts";
 import {
   generateRecoveryKey,
   unpackExport,
@@ -444,6 +445,13 @@ describeUi("preserve and restore workflow through the web UI", () => {
     const manifest = await api<any>(
       `/projects/${project}/builds/${buildId}/captures/${captureId}/manifest`,
     );
+    // Coverage lists what the stored manifest says is missing or blocked.
+    const coverage = captureCoverageSchema.parse(
+      await api<any>(
+        `/projects/${project}/builds/${buildId}/captures/${captureId}/coverage`,
+      ),
+    );
+    expect(coverage.missing_or_blocked).toEqual(manifest.missing_or_blocked);
     await eventually(() => text(page.getByTestId("file-count"))).toContain(
       `${manifest.files.length} file`,
     );
@@ -519,12 +527,21 @@ describeUi("preserve and restore workflow through the web UI", () => {
     for (const reason of verification.network_required.reasons)
       expect(await text(network)).toContain(reason);
 
-    // The report is uploaded as verification evidence; the API has no route to download it.
-    await page.getByTestId("report-note").waitFor();
-    expect(await text(page.getByTestId("report-note"))).toContain(
-      "does not expose a download route",
+    // The restore report is served by the API and summarised as text.
+    expect(await text(page.getByTestId("verification-status"))).toContain(
+      "completed",
     );
-    expect(await page.locator("main a[href*='evidence']").count()).toBe(0);
+    const reportUrl = `/projects/${project}/builds/${buildId}/captures/${captureId}/verifications/${verificationId}/report`;
+    const report = restoreReportSchema.parse(await api<any>(reportUrl));
+    const href = await page.getByTestId("report-download").getAttribute("href");
+    expect(href).toBe(`/api/v1${reportUrl}`);
+    const steps = report.scopes.flatMap((scope) => scope.steps);
+    if (steps.length > 0) {
+      const table = page.getByTestId("report-steps");
+      await table.waitFor();
+      for (const step of steps)
+        expect(await text(table)).toContain(step.step_id);
+    }
     expect(await text(page.getByTestId("verification-result"))).not.toMatch(
       /%/u,
     );

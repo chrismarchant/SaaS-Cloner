@@ -4,7 +4,6 @@ import {
   type JobFailure,
   buildJobInputSchema,
   planJobInputSchema,
-  recoveryManifestSchema,
   validateRelativePath,
   type JobRequirements,
   RUNNER_PROTOCOL_VERSION,
@@ -40,6 +39,7 @@ import {
 } from "./mappers.js";
 import { viewsFor } from "./investigations.js";
 import { applyJobResult, assertJobResult } from "./runnerResults.js";
+import { readStoredManifest } from "./storedManifest.js";
 import { sendObject } from "./streaming.js";
 import { STREAMED, type HandlersFor, type RouteContext } from "./types.js";
 import { declaredLength } from "./uploads.js";
@@ -617,13 +617,7 @@ const serveInput = async (
     );
     if (capture === null || capture.manifest_object_key === null)
       throw new ApiError("not_found", "Manifest not found");
-    const manifest = recoveryManifestSchema.parse(
-      await readJsonObject(
-        ctx,
-        capture.manifest_object_key,
-        MANIFEST_READ_LIMIT,
-      ),
-    );
+    const manifest = await readStoredManifest(ctx, capture.manifest_object_key);
     const file = manifest.files[Number(captureFile[1])];
     if (file === undefined)
       throw new ApiError("not_found", "No such package file", { name });
@@ -675,9 +669,6 @@ const serveInput = async (
 const ARGUMENTS_READ_LIMIT = 4 * 1024 * 1024;
 
 /** Reads a small stored JSON object; absent or unparseable objects are `null`. */
-/** Manifests list every package file; allow far more than tool arguments. */
-const MANIFEST_READ_LIMIT = 64 * 1024 * 1024;
-
 const readJsonObject = async (
   ctx: AppContext,
   key: string | null,

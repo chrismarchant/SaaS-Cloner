@@ -1,11 +1,16 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useBuild, useBuildJobs, useCreatePlan } from "../../api/preserveHooks";
+import {
+  useBuild,
+  useCaptures,
+  useCreatePlan,
+  usePlans,
+  useRecoveryExports,
+} from "../../api/preserveHooks";
 import { useProject } from "../../api/project";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { describeComponent, describeSource } from "../../lib/buildView";
-import { producedId } from "../../lib/buildJobs";
 import { formatTimestamp } from "../../lib/format";
-import { Crumbs, Facts, JobLinks } from "./shared";
+import { Crumbs, Facts, RunList, runLabel } from "./shared";
 
 export function BuildDetail() {
   const { b = "" } = useParams();
@@ -13,36 +18,12 @@ export function BuildDetail() {
   const navigate = useNavigate();
   const build = useBuild(project.id, b);
   const createPlan = useCreatePlan(project.id, b);
-  const plans = useBuildJobs(
-    project.id,
-    "preservation.plan",
-    "build_id",
-    b,
-    true,
-  );
-  const captures = useBuildJobs(
-    project.id,
-    "preservation.capture",
-    "build_id",
-    b,
-    true,
-  );
-  const exports_ = useBuildJobs(
-    project.id,
-    "recovery.export",
-    "build_id",
-    b,
-    true,
-  );
+  const plans = usePlans(project.id, b);
+  const captures = useCaptures(project.id, b);
+  const exports_ = useRecoveryExports(project.id, b, null);
   if (build.isPending) return <p role="status">Loading build…</p>;
   if (build.isError) return <ErrorNotice error={build.error} />;
   const data = build.data;
-  const link =
-    (kind: string, field: string) =>
-    (job: Parameters<typeof producedId>[0]) => {
-      const id = producedId(job, field);
-      return id === null ? null : `/preserve/builds/${b}/${kind}/${id}`;
-    };
   return (
     <>
       <Crumbs
@@ -66,8 +47,10 @@ export function BuildDetail() {
           disabled={!canWrite || createPlan.isPending}
           onClick={() =>
             createPlan.mutate(undefined, {
-              onSuccess: (job) =>
-                navigate(`/preserve/builds/${b}/plans/${job.id}`),
+              onSuccess: (created) =>
+                navigate(`/preserve/builds/${b}/plans/${created.plan_id}`, {
+                  state: { jobId: created.job_id },
+                }),
             })
           }
         >
@@ -110,32 +93,41 @@ export function BuildDetail() {
       </section>
 
       <h2>Work on this build</h2>
-      <ErrorNotice error={plans.error ?? captures.error ?? exports_.error} />
       <div className="grid-2">
-        <JobLinks
+        <RunList
           title="Plans"
-          jobs={plans.jobs}
-          href={link("plans", "plan_id")}
+          query={plans}
+          row={(plan) => ({
+            id: plan.id,
+            to: `/preserve/builds/${b}/plans/${plan.id}`,
+            label: runLabel(plan.created_at, plan.id),
+            status: plan.status,
+          })}
           empty="No plan has been created."
         />
-        <JobLinks
+        <RunList
           title="Captures"
-          jobs={captures.jobs}
-          href={link("captures", "capture_id")}
+          query={captures}
+          row={(capture) => ({
+            id: capture.id,
+            to: `/preserve/builds/${b}/captures/${capture.id}`,
+            label: runLabel(capture.started_at, capture.id),
+            status: capture.status,
+          })}
           empty="No capture has been started. Capture from a produced plan."
         />
-        <JobLinks
+        <RunList
           title="Exports"
-          jobs={exports_.jobs}
-          href={link("exports", "export_id")}
+          query={exports_}
+          row={(record) => ({
+            id: record.id,
+            to: `/preserve/builds/${b}/exports/${record.id}`,
+            label: runLabel(record.created_at, record.id),
+            status: record.status,
+          })}
           empty="No export has been made. Export from a completed capture."
         />
       </div>
-      <p className="help-text">
-        These lists are the jobs of this build; the API has no list routes for
-        plans, captures or exports, so only up to 200 jobs of each kind in the
-        project are searched.
-      </p>
     </>
   );
 }

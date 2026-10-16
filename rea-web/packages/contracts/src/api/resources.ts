@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recoveryManifestSchema } from "../recovery/manifest.js";
 import {
   verificationScopeSchema,
   verificationStatusSchema,
@@ -415,6 +416,12 @@ export const jobSummarySchema = z.object({
   updated_at: timestampSchema,
 });
 
+/** `createPlan`: the plan to poll and the job producing it (`id` is that job's id). */
+export const createPlanResponseSchema = jobSummarySchema.extend({
+  plan_id: idSchema,
+  job_id: idSchema,
+});
+
 export const approvalRequestViewSchema = z.object({
   approval_id: z.string(),
   job_id: idSchema,
@@ -603,10 +610,20 @@ export const preservationPlanBodySchema = z.object({
 });
 export type PreservationPlanBody = z.infer<typeof preservationPlanBodySchema>;
 
+/** Run status of a plan, capture, verification or export, derived from its job. */
+export const runStatusSchema = z.enum([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
 export const preservationPlanSchema = preservationPlanBodySchema.extend({
   id: idSchema,
   build_id: idSchema,
   job_id: idSchema,
+  status: runStatusSchema,
   runner_id: idSchema.nullable(),
   created_at: timestampSchema,
 });
@@ -616,7 +633,7 @@ export const captureSchema = z.object({
   build_id: idSchema,
   plan_id: idSchema,
   job_id: idSchema,
-  status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
+  status: runStatusSchema,
   manifest_object_key: z.string().nullable(),
   manifest_sha256: z.string().nullable(),
   consistency: z.enum(["single_point", "inconsistent", "unknown"]).nullable(),
@@ -633,6 +650,8 @@ export const verificationSchema = z.object({
   id: idSchema,
   capture_id: idSchema,
   job_id: idSchema,
+  /** Derived from the job, like a capture's: `overall` is only set once it succeeds. */
+  status: runStatusSchema,
   scope: z.array(verificationScopeSchema),
   results: z.array(
     z.object({
@@ -653,8 +672,22 @@ export const verificationSchema = z.object({
   created_at: timestampSchema,
 });
 
+/** One entry of the manifest's `missing_or_blocked`, which owns the format. */
+export const coverageItemSchema =
+  recoveryManifestSchema.shape.missing_or_blocked.element;
+export const captureCoverageSchema = z.object({
+  components: z.record(z.string(), z.string()),
+  /** Verbatim from the stored manifest, which owns these facts. */
+  missing_or_blocked: z.array(coverageItemSchema),
+  consistency: z.string().nullable(),
+});
+
 export const createExportRequestSchema = z.object({
-  sign_with_key_id: z.string().optional(),
+  /** Public key id (sha256 of the DER SPKI key) of a signing key held by the runner. */
+  sign_with_key_id: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/u)
+    .optional(),
   encrypt_to_recipients: z.array(z.string()).optional(),
   include_secret_escrow: z.boolean().default(false),
 });
@@ -668,6 +701,22 @@ export const exportSchema = z.object({
   signature: z.record(z.string(), z.unknown()).nullable(),
   encryption: z.record(z.string(), z.unknown()).nullable(),
   created_at: timestampSchema,
+});
+
+/**
+ * What the runner records for a signed export: the public fields of the
+ * detached signature document plus where the document is stored.
+ */
+export const exportSignatureSummarySchema = z.object({
+  format: z.literal("rea-web-export-signature"),
+  version: z.literal(1),
+  algorithm: z.literal("ed25519"),
+  public_key_id: z.string(),
+  archive_sha256: z.string(),
+  signed_at: z.string(),
+  object_key: z.string(),
+  sha256: z.string(),
+  size: z.number().int().nonnegative(),
 });
 
 /**

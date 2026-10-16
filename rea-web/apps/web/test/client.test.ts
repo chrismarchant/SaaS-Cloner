@@ -294,3 +294,53 @@ describe("target names", () => {
     expect(targetNameProblem("日本.zip")).toMatch(/header/u);
   });
 });
+
+describe("preserve routes", () => {
+  const B = "01970000-0000-7000-8000-000000000003";
+  const PLAN = "01970000-0000-7000-8000-000000000004";
+  const JOB = "01970000-0000-7000-8000-000000000005";
+
+  it("keeps plan_id and job_id from createPlan through response parsing", async () => {
+    const { fetch } = fakeFetch(() =>
+      json(
+        {
+          id: JOB,
+          project_id: P,
+          kind: "preservation.plan",
+          state: "queued",
+          attempt: 1,
+          created_at: "2026-10-12T00:00:00.000Z",
+          updated_at: "2026-10-12T00:00:00.000Z",
+          plan_id: PLAN,
+          job_id: JOB,
+        },
+        202,
+      ),
+    );
+    const created = await createApiClient({ fetch }).call("createPlan", {
+      params: { p: P, b: B },
+      body: {},
+    });
+    expect(created.plan_id).toBe(PLAN);
+    expect(created.job_id).toBe(JOB);
+  });
+
+  it("builds the list and download urls from the contracts", () => {
+    const client = createApiClient({ fetch: fakeFetch(() => json({})).fetch });
+    const root = `/api/v1/projects/${P}/builds/${B}`;
+    expect(
+      client.url("downloadVerificationReport", {
+        params: { p: P, b: B, c: PLAN, v: JOB },
+      }),
+    ).toBe(`${root}/captures/${PLAN}/verifications/${JOB}/report`);
+    expect(
+      client.url("downloadExportSignature", { params: { p: P, b: B, e: JOB } }),
+    ).toBe(`${root}/exports/${JOB}/signature`);
+    expect(
+      client.url("listExports", {
+        params: { p: P, b: B },
+        query: { limit: 50, capture_id: PLAN },
+      }),
+    ).toBe(`${root}/exports?limit=50&capture_id=${PLAN}`);
+  });
+});

@@ -20,6 +20,7 @@ import {
   type jobSummarySchema,
   type membershipSchema,
   type preservationPlanSchema,
+  type runStatusSchema,
   type projectSchema,
   type runnerSummarySchema,
   type targetSchema,
@@ -292,27 +293,28 @@ export const buildView = (b: BuildRecord): Out<typeof buildSchema> =>
     created_at: b.created_at,
   }) as Out<typeof buildSchema>;
 
-export const planView = (p: PlanRecord): Out<typeof preservationPlanSchema> => {
-  const doc = p.plan ?? {};
-  return {
+/** Status of a plan, capture, verification or export, derived from its job. */
+export const runStatusFromJob = (
+  job: JobRecord | null,
+): z.output<typeof runStatusSchema> => statusFromJobState(job?.state ?? null);
+
+/** A plan whose job has not produced its document yet lists with empty components. */
+export const planView = (
+  p: PlanRecord,
+  job: JobRecord | null,
+): Out<typeof preservationPlanSchema> =>
+  ({
     components: [],
     consistency_strategy: "",
     known_omissions: [],
-    ...doc,
+    ...(p.plan ?? {}),
     id: p.id,
     build_id: p.build_id,
     job_id: p.job_id,
+    status: runStatusFromJob(job),
     runner_id: p.runner_id,
     created_at: p.created_at,
-  } as Out<typeof preservationPlanSchema>;
-};
-
-type RunStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-
-export const runStatusFromJob = (job: JobRecord | null): RunStatus => {
-  const status = statusFromJobState(job?.state ?? null);
-  return status;
-};
+  }) as Out<typeof preservationPlanSchema>;
 
 export const captureView = (
   c: CaptureRecord,
@@ -342,11 +344,13 @@ export const verificationScopes = (v: VerificationRecord): string[] => {
 
 export const verificationView = (
   v: VerificationRecord,
+  job: JobRecord | null,
 ): Out<typeof verificationSchema> =>
   ({
     id: v.id,
     capture_id: v.capture_id,
     job_id: v.job_id,
+    status: runStatusFromJob(job),
     scope: verificationScopes(v),
     results: v.results,
     network_required: v.network_required,

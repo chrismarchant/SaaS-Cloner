@@ -6,6 +6,7 @@ import {
   type PageOptions,
   executor,
   firstRow,
+  idKeysetPage,
   json,
   keysetPage,
   patchRow,
@@ -163,6 +164,11 @@ export interface CapturesRepository {
   findByJobId(job_id: string): Promise<CaptureRecord | null>;
   /** Captures have no `created_at`; newest first by id (UUIDv7). */
   listByBuild(build_id: string, limit?: number): Promise<CaptureRecord[]>;
+  /** Paginated, newest first by id (UUIDv7); the cursor carries the last id. */
+  pageByBuild(
+    build_id: string,
+    page?: PageOptions,
+  ): Promise<Page<CaptureRecord>>;
   update(id: string, patch: CaptureUpdate): Promise<CaptureRecord | null>;
 }
 
@@ -201,6 +207,13 @@ export function capturesRepository(db: Database): CapturesRepository {
       );
       return result.rows;
     },
+    pageByBuild: (build_id, page = {}) =>
+      idKeysetPage<CaptureRecord>(db, {
+        from: "captures t",
+        where: ["t.build_id = $1"],
+        params: [build_id],
+        ...page,
+      }),
     update: (id, patch) =>
       patchRow<CaptureRecord>(
         db,
@@ -328,6 +341,11 @@ export interface ExportsRepository {
     capture_id: string,
     page?: PageOptions,
   ): Promise<Page<ExportRecord>>;
+  /** Every export of the build's captures, newest first; optionally one capture's. */
+  listByBuild(
+    build_id: string,
+    page?: PageOptions & { capture_id?: string | undefined },
+  ): Promise<Page<ExportRecord>>;
   update(id: string, patch: ExportUpdate): Promise<ExportRecord | null>;
 }
 
@@ -362,6 +380,16 @@ export function exportsRepository(db: Database): ExportsRepository {
         from: "exports t",
         where: ["t.capture_id = $1"],
         params: [capture_id],
+        ...page,
+      }),
+    listByBuild: (build_id, { capture_id, ...page } = {}) =>
+      keysetPage<ExportRecord>(db, {
+        from: "exports t JOIN captures c ON c.id = t.capture_id",
+        where:
+          capture_id === undefined
+            ? ["c.build_id = $1"]
+            : ["c.build_id = $1", "t.capture_id = $2"],
+        params: capture_id === undefined ? [build_id] : [build_id, capture_id],
         ...page,
       }),
     update: (id, patch) =>

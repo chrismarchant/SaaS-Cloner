@@ -90,20 +90,29 @@ cannot register arbitrary host paths.
 
 ## Builds, preservation, recovery
 
-| Method | Path                                                      | Role   | Notes                                                                  |
-| ------ | --------------------------------------------------------- | ------ | ---------------------------------------------------------------------- |
-| POST   | `/projects/{p}/builds`                                    | member | `{ name, source, components }`                                         |
-| GET    | `/projects/{p}/builds`, `/builds/{b}`                     | viewer |                                                                        |
-| POST   | `/projects/{p}/builds/{b}/plans`                          | member | Job `preservation.plan`; result is a `preservation_plan`               |
-| GET    | `/projects/{p}/builds/{b}/plans/{pl}`                     | viewer | Components, permissions, dependencies, consistency strategy, omissions |
-| POST   | `/projects/{p}/builds/{b}/captures`                       | member | `{ plan_id }`; job `preservation.capture`                              |
-| GET    | `/projects/{p}/builds/{b}/captures/{c}`                   | viewer | Status, manifest summary, consistency classification                   |
-| GET    | `/projects/{p}/builds/{b}/captures/{c}/manifest`          | viewer | Full `manifest.json`                                                   |
-| GET    | `/projects/{p}/builds/{b}/captures/{c}/coverage`          | viewer | Per-component status + missing/blocked list                            |
-| POST   | `/projects/{p}/builds/{b}/captures/{c}/verifications`     | member | `{ scope: [...] }`; job `recovery.verify`                              |
-| GET    | `/projects/{p}/builds/{b}/captures/{c}/verifications/{v}` | viewer | Per-scope results                                                      |
-| POST   | `/projects/{p}/builds/{b}/captures/{c}/exports`           | member | `{ sign?: key_id, encrypt?: {recipients} }`; job `recovery.export`     |
-| GET    | `/projects/{p}/builds/{b}/exports/{e}`                    | viewer | Streams the tar (and `.sig`); no expiring URLs embedded                |
+List routes are paginated like the other lists (`cursor`, `limit`; `{ items, next_cursor }`, base64url cursors), newest first, and need the viewer role. A create route answers 202 with the new resource, which carries its `id` and its `job_id`; `status` on a plan, capture, verification or export is derived from that job.
+
+| Method | Path                                                             | Role   | Notes                                                                                                                                                                                                    |
+| ------ | ---------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/projects/{p}/builds`                                           | member | `{ name, source, components }`                                                                                                                                                                           |
+| GET    | `/projects/{p}/builds`, `/builds/{b}`                            | viewer |                                                                                                                                                                                                          |
+| POST   | `/projects/{p}/builds/{b}/plans`                                 | member | Job `preservation.plan`; answers the job summary plus `plan_id` and `job_id` (`id` is the job's)                                                                                                         |
+| GET    | `/projects/{p}/builds/{b}/plans`                                 | viewer | Plans of the build with `status`; a plan whose job has not produced it lists with empty components                                                                                                       |
+| GET    | `/projects/{p}/builds/{b}/plans/{pl}`                            | viewer | Components, permissions, dependencies, consistency strategy, omissions; 409 `plan_not_ready` until produced. `{pl}` is the plan id, never a job id                                                       |
+| POST   | `/projects/{p}/builds/{b}/captures`                              | member | `{ plan_id }`; job `preservation.capture`                                                                                                                                                                |
+| GET    | `/projects/{p}/builds/{b}/captures`                              | viewer | Captures of the build                                                                                                                                                                                    |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}`                          | viewer | Status, manifest summary, consistency classification                                                                                                                                                     |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/manifest`                 | viewer | Full `manifest.json`                                                                                                                                                                                     |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/coverage`                 | viewer | Per-component status; `missing_or_blocked` is `{ component_id, status, reason, remediation }` copied from the stored manifest; 409 `manifest_not_ready` before there is one                              |
+| POST   | `/projects/{p}/builds/{b}/captures/{c}/verifications`            | member | `{ scope: [...] }`; job `recovery.verify`                                                                                                                                                                |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/verifications`            | viewer | Verifications of the capture                                                                                                                                                                             |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/verifications/{v}`        | viewer | `status` (from the job), per-scope results, `overall` once reported                                                                                                                                      |
+| GET    | `/projects/{p}/builds/{b}/captures/{c}/verifications/{v}/report` | viewer | Streams the `restore-report.json` the runner uploaded, only from the verification's own storage prefix; 409 `report_not_ready` while the job runs; 404 when none was stored (for example the job failed) |
+| POST   | `/projects/{p}/builds/{b}/captures/{c}/exports`                  | member | `{ sign_with_key_id?, encrypt_to_recipients?, include_secret_escrow? }`; job `recovery.export`                                                                                                           |
+| GET    | `/projects/{p}/builds/{b}/exports`                               | viewer | Exports of the build; optional `?capture_id=` (404 if the capture is not in the build)                                                                                                                   |
+| GET    | `/projects/{p}/builds/{b}/exports/{e}`                           | viewer | Export record: `status`, digest, size, `signature` summary, `encryption`                                                                                                                                 |
+| GET    | `/projects/{p}/builds/{b}/exports/{e}/download`                  | viewer | Streams the archive; 409 `export_not_ready`                                                                                                                                                              |
+| GET    | `/projects/{p}/builds/{b}/exports/{e}/signature`                 | viewer | Streams the detached signature document of a signed export; 409 `signature_not_ready` while the job runs; 404 `not_signed` otherwise                                                                     |
 
 ## Runner protocol (runner token)
 

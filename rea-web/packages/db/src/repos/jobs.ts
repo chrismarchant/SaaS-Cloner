@@ -108,6 +108,8 @@ export interface JobsRepository {
   /** Inserts the job (`queued`), its fencing row and event seq 1 `job.created`. */
   create(input: CreateJobInput, client?: pg.PoolClient): Promise<JobRecord>;
   findById(id: string): Promise<JobRecord | null>;
+  /** The jobs that exist among `ids`, in no particular order. */
+  listByIds(ids: readonly string[]): Promise<JobRecord[]>;
   list(
     project_id: string,
     options?: PageOptions & { state?: JobState; kind?: JobKind },
@@ -793,6 +795,14 @@ export function jobsRepository(db: Database): JobsRepository {
   return {
     create,
     findById: (id) => loadJob(db, id),
+    async listByIds(ids) {
+      if (ids.length === 0) return [];
+      const result = await db.query<JobRow>(
+        `SELECT ${JOB_COLUMNS} FROM ${JOB_FROM} WHERE t.id = ANY($1::uuid[])`,
+        [ids],
+      );
+      return result.rows.map(toJob);
+    },
     async list(project_id, options = {}) {
       const params: unknown[] = [project_id];
       const where = ["t.project_id = $1"];

@@ -116,6 +116,42 @@ export async function keysetPage<R extends { created_at: string; id: string }>(
   };
 }
 
+/**
+ * Newest-first keyset pagination for tables without `created_at` (UUIDv7 ids
+ * sort by creation time). The cursor is base64url of the last id.
+ */
+export async function idKeysetPage<R extends { id: string }>(
+  run: Queryable,
+  q: Omit<KeysetQuery, "columns">,
+): Promise<Page<R>> {
+  const limit = clampLimit(q.limit);
+  const params = [...(q.params ?? [])];
+  const where = [...(q.where ?? [])];
+  if (q.cursor !== undefined) {
+    const [id] = decodeCursor(q.cursor, 1) as [string];
+    params.push(id);
+    where.push(`t.id < $${params.length}::uuid`);
+  }
+  params.push(limit + 1);
+  const sql = `SELECT t.* FROM ${q.from}
+    ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY t.id DESC
+    LIMIT $${params.length}`;
+  const result = await run.query<R>(sql, params).catch((error: unknown) => {
+    if (q.cursor !== undefined && pgErrorCode(error) === "22P02") {
+      throw new ApiError("validation_failed", "invalid cursor");
+    }
+    throw error;
+  });
+  const items = result.rows.slice(0, limit);
+  const last = items[items.length - 1];
+  const hasMore = result.rows.length > limit && last !== undefined;
+  return {
+    items,
+    next_cursor: hasMore ? encodeCursor([last.id]) : null,
+  };
+}
+
 export type ColumnKind = "plain" | "json";
 
 /**

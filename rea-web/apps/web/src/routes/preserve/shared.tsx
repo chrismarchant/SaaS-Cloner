@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
+import type { InfiniteData } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import type { Job } from "@rea-web/contracts/browser";
 import { Badge } from "../../components/Badge";
-import { formatTimestamp } from "../../lib/format";
+import { ErrorNotice } from "../../components/ErrorNotice";
+import { formatTimestamp, shortId } from "../../lib/format";
 import type { Row } from "../../lib/buildView";
 
 export interface Crumb {
@@ -49,41 +50,67 @@ export function Facts({ rows }: { rows: readonly Row[] }) {
   );
 }
 
-/** Earlier jobs of one kind, each linking to the resource it produced. */
-export function JobLinks({
+export interface RunRow {
+  readonly id: string;
+  readonly to: string;
+  readonly label: string;
+  /** The status derived from the resource's job. */
+  readonly status: string;
+}
+
+interface PagedQuery<T> {
+  readonly data: InfiniteData<{ items: T[] }> | undefined;
+  readonly isPending: boolean;
+  readonly error: unknown;
+  readonly hasNextPage: boolean;
+  readonly isFetchingNextPage: boolean;
+  fetchNextPage(): unknown;
+}
+
+/** One page-by-page list of plans, captures, verifications or exports, newest first. */
+export function RunList<T>({
   title,
-  jobs,
-  href,
+  query,
+  row,
   empty,
 }: {
   title: string;
-  jobs: readonly Job[];
-  /** Link target for a job, or null when its resource id is not known. */
-  href: (job: Job) => string | null;
+  query: PagedQuery<T>;
+  row: (item: T) => RunRow;
   empty: string;
 }) {
+  const rows = (query.data?.pages ?? []).flatMap((page) => page.items.map(row));
   return (
     <section aria-label={title}>
       <h3>{title}</h3>
-      {jobs.length === 0 ? (
+      <ErrorNotice error={query.error} />
+      {query.isPending && <p role="status">Loading…</p>}
+      {!query.isPending && rows.length === 0 && (
         <p className="muted">{empty}</p>
-      ) : (
+      )}
+      {rows.length > 0 && (
         <ul className="plain" data-testid={`list-${title.toLowerCase()}`}>
-          {jobs.map((job) => {
-            const target = href(job);
-            return (
-              <li key={job.id}>
-                {target === null ? (
-                  formatTimestamp(job.created_at)
-                ) : (
-                  <Link to={target}>{formatTimestamp(job.created_at)}</Link>
-                )}{" "}
-                <Badge value={job.state} />
-              </li>
-            );
-          })}
+          {rows.map((item) => (
+            <li key={item.id}>
+              <Link to={item.to}>{item.label}</Link>{" "}
+              <Badge value={item.status} />
+            </li>
+          ))}
         </ul>
+      )}
+      {query.hasNextPage && (
+        <button
+          type="button"
+          disabled={query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+        >
+          Load more
+        </button>
       )}
     </section>
   );
 }
+
+/** Link text for a resource: its time when known, otherwise the start of its id. */
+export const runLabel = (time: string | null, id: string): string =>
+  time === null ? `${shortId(id)} (not started)` : formatTimestamp(time);

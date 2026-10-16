@@ -8,7 +8,9 @@ import {
 import type { z } from "zod";
 import { useRunners } from "../../api/hooks";
 import {
+  downloadReportUrl,
   useCreateVerification,
+  useRestoreReport,
   useVerification,
 } from "../../api/preserveHooks";
 import { useProject } from "../../api/project";
@@ -17,7 +19,8 @@ import { ErrorNotice } from "../../components/ErrorNotice";
 import { CheckField } from "../../components/Fields";
 import { JobPanel } from "../../components/JobPanel";
 import { SelectField } from "../../components/SelectField";
-import { formatTimestamp } from "../../lib/format";
+import { formatTimestamp, safeFileName } from "../../lib/format";
+import { stepSummaries } from "../../lib/reportView";
 import {
   SCOPE_HELP,
   humanise,
@@ -181,7 +184,101 @@ function ScopeRow({
   );
 }
 
-function VerificationResult({ verification }: { verification: Verification }) {
+function ReportSummary({
+  projectId,
+  b,
+  c,
+  verification,
+}: {
+  projectId: string;
+  b: string;
+  c: string;
+  verification: Verification;
+}) {
+  const report = useRestoreReport(projectId, b, c, verification.id, true);
+  const steps =
+    report.data?.ok === true ? stepSummaries(report.data.report) : [];
+  return (
+    <section aria-labelledby="report-heading" data-testid="report-note">
+      <h3 id="report-heading">Restore report</h3>
+      <p>
+        <a
+          className="button"
+          href={downloadReportUrl(projectId, b, c, verification.id)}
+          download={safeFileName(
+            `restore-report-${verification.id}.json`,
+            "restore-report.json",
+          )}
+          data-testid="report-download"
+        >
+          Download the restore report
+        </a>
+      </p>
+      <ErrorNotice error={report.error} />
+      {report.isPending && <p role="status">Loading the report…</p>}
+      {report.data?.ok === false && (
+        <div className="notice notice-error" role="alert">
+          <p>
+            <strong>
+              The stored report does not match the restore report format.
+            </strong>{" "}
+            No summary is shown; download it to read it as stored.
+          </p>
+          <ul>
+            {report.data.issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {report.data?.ok === true &&
+        (steps.length === 0 ? (
+          <p className="muted" data-testid="report-steps-none">
+            The report records no restore steps; only the integrity scope ran,
+            or every scope was blocked before a step started.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table" data-testid="report-steps">
+              <caption>Restore steps by scope</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Scope</th>
+                  <th scope="col">Step</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Exit code</th>
+                  <th scope="col">Network isolated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {steps.map((step) => (
+                  <tr key={`${step.scope}:${step.stepId}`}>
+                    <td>{humanise(step.scope)}</td>
+                    <th scope="row">{step.stepId}</th>
+                    <td>{step.status}</td>
+                    <td>{step.exitCode === null ? "none" : step.exitCode}</td>
+                    <td>{step.networkIsolated ? "yes" : "no"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+    </section>
+  );
+}
+
+function VerificationResult({
+  verification,
+  projectId,
+  b,
+  c,
+}: {
+  verification: Verification;
+  projectId: string;
+  b: string;
+  c: string;
+}) {
   const overall = verification.overall;
   const overallWording =
     overall === null ? null : verificationStatusWording(overall);
@@ -196,10 +293,23 @@ function VerificationResult({ verification }: { verification: Verification }) {
       <h2>Result</h2>
       <dl className="facts">
         <div className="fact">
+          <dt>Status</dt>
+          <dd data-testid="verification-status">
+            <Badge value={verification.status} />
+          </dd>
+        </div>
+        <div className="fact">
           <dt>Overall</dt>
           <dd data-testid="verification-overall">
             {overall === null || overallWording === null ? (
-              <Badge value="not reported yet" tone="neutral" />
+              <Badge
+                value={
+                  verification.status === "completed"
+                    ? "not reported"
+                    : "not reported yet"
+                }
+                tone="neutral"
+              />
             ) : (
               <Badge value={overall} tone={overallWording.tone} />
             )}
@@ -255,11 +365,21 @@ function VerificationResult({ verification }: { verification: Verification }) {
           </tbody>
         </table>
       </div>
-      <p className="help-text" data-testid="report-note">
-        {hasEvidence
-          ? "The runner stored a restore report for this verification as verification evidence. The API does not expose a download route for it yet, so it cannot be linked from here."
-          : "No restore report is stored for this verification."}
-      </p>
+      {hasEvidence ? (
+        <ReportSummary
+          projectId={projectId}
+          b={b}
+          c={c}
+          verification={verification}
+        />
+      ) : (
+        <p className="help-text" data-testid="report-note">
+          {verification.status === "pending" ||
+          verification.status === "running"
+            ? "The restore report is stored when the verification job finishes."
+            : "No restore report is stored for this verification."}
+        </p>
+      )}
     </section>
   );
 }
@@ -283,7 +403,12 @@ export function VerificationPage() {
       <ErrorNotice error={verification.error} />
       {verification.data !== undefined && (
         <>
-          <VerificationResult verification={verification.data} />
+          <VerificationResult
+            verification={verification.data}
+            projectId={project.id}
+            b={b}
+            c={c}
+          />
           <JobPanel
             projectId={project.id}
             jobId={verification.data.job_id}

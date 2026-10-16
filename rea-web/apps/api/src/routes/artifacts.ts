@@ -131,6 +131,22 @@ export const capturePrefix = (
   captureId: string,
 ): string => `projects/${projectId}/builds/${buildId}/captures/${captureId}`;
 
+/** Storage prefix of one verification's evidence; the restore report sits at its root. */
+export const verificationPrefix = (
+  projectId: string,
+  buildId: string,
+  captureId: string,
+  verificationId: string,
+): string =>
+  `${capturePrefix(projectId, buildId, captureId)}/verification/${verificationId}`;
+
+/** Storage key of one export's archive; its detached signature is `<key>.sig`. */
+export const exportArchiveKey = (
+  projectId: string,
+  buildId: string,
+  exportId: string,
+): string => `projects/${projectId}/builds/${buildId}/exports/${exportId}.tar`;
+
 /** Derives the storage key and bookkeeping for one artifact; clients never supply keys. */
 export const planArtifact = (
   ctx: AppContext,
@@ -225,7 +241,7 @@ export const planArtifact = (
 
   if (job.kind === "recovery.export") {
     const exportId = requireInput(job, "export_id");
-    const archive = `${buildBase}/exports/${exportId}.tar`;
+    const archive = exportArchiveKey(p, buildId, exportId);
     if (kind === "export_archive")
       return {
         key: archive,
@@ -264,7 +280,7 @@ export const planArtifact = (
     const captureId = requireInput(job, "capture_id");
     const verificationId = requireInput(job, "verification_id");
     return {
-      key: `${buildBase}/captures/${captureId}/verification/${verificationId}/${sanitizeRelative(headers.name)}`,
+      key: `${verificationPrefix(p, buildId, captureId, verificationId)}/${sanitizeRelative(headers.name)}`,
       kind,
       artifactId: null,
       remainingBytes: remaining,

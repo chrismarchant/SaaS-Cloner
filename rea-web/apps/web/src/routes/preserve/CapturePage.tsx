@@ -1,25 +1,22 @@
 import { Link, useParams } from "react-router-dom";
 import {
-  useBuildJobs,
   useCapture,
   useCoverage,
   useManifest,
+  useRecoveryExports,
+  useVerifications,
 } from "../../api/preserveHooks";
 import { useProject } from "../../api/project";
 import { Badge } from "../../components/Badge";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { JobPanel } from "../../components/JobPanel";
-import { producedId } from "../../lib/buildJobs";
 import { formatTimestamp } from "../../lib/format";
 import {
   componentStatusWording,
   consistencyWording,
 } from "../../lib/recoveryWording";
 import { FileList, ManifestView } from "./ManifestView";
-import { Crumbs, JobLinks } from "./shared";
-
-const show = (value: unknown): string =>
-  typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+import { Crumbs, RunList, runLabel } from "./shared";
 
 function Coverage({
   projectId,
@@ -51,17 +48,33 @@ function Coverage({
               blocked.
             </p>
           ) : (
-            <ul className="plain">
-              {coverage.data.missing_or_blocked.map((entry, index) => (
-                <li key={index}>
-                  {Object.entries(entry).map(([key, value]) => (
-                    <span key={key}>
-                      <span className="label">{key}</span> {show(value)}{" "}
-                    </span>
+            <div className="table-wrap">
+              <table className="table" data-testid="coverage-missing">
+                <thead>
+                  <tr>
+                    <th scope="col">Component</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Reason</th>
+                    <th scope="col">Remediation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coverage.data.missing_or_blocked.map((item, index) => (
+                    <tr key={`${index}:${item.component_id}`}>
+                      <th scope="row">{item.component_id}</th>
+                      <td>
+                        <Badge
+                          value={item.status}
+                          tone={item.status === "blocked" ? "bad" : "warn"}
+                        />
+                      </td>
+                      <td>{item.reason}</td>
+                      <td>{item.remediation}</td>
+                    </tr>
                   ))}
-                </li>
-              ))}
-            </ul>
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -80,32 +93,14 @@ export function CapturePage() {
     c,
     capture.data?.manifest_object_key != null,
   );
-  const verifications = useBuildJobs(
-    project.id,
-    "recovery.verify",
-    "capture_id",
-    c,
-    true,
-  );
-  const exports_ = useBuildJobs(
-    project.id,
-    "recovery.export",
-    "capture_id",
-    c,
-    true,
-  );
+  const verifications = useVerifications(project.id, b, c);
+  const exports_ = useRecoveryExports(project.id, b, c);
   if (capture.isPending) return <p role="status">Loading capture…</p>;
   if (capture.isError) return <ErrorNotice error={capture.error} />;
   const data = capture.data;
   const consistency = consistencyWording(data.consistency);
   const statuses = Object.entries(data.component_statuses);
   const base = `/preserve/builds/${b}/captures/${c}`;
-  const href =
-    (kind: string, field: string, root: string) =>
-    (job: Parameters<typeof producedId>[0]) => {
-      const id = producedId(job, field);
-      return id === null ? null : `${root}/${kind}/${id}`;
-    };
   return (
     <>
       <Crumbs
@@ -242,18 +237,27 @@ export function CapturePage() {
       )}
 
       <h2>Verifications and exports</h2>
-      <ErrorNotice error={verifications.error ?? exports_.error} />
       <div className="grid-2">
-        <JobLinks
+        <RunList
           title="Verifications"
-          jobs={verifications.jobs}
-          href={href("verifications", "verification_id", base)}
+          query={verifications}
+          row={(verification) => ({
+            id: verification.id,
+            to: `${base}/verifications/${verification.id}`,
+            label: runLabel(verification.created_at, verification.id),
+            status: verification.status,
+          })}
           empty="This capture has not been verified."
         />
-        <JobLinks
+        <RunList
           title="Exports"
-          jobs={exports_.jobs}
-          href={href("exports", "export_id", `/preserve/builds/${b}`)}
+          query={exports_}
+          row={(record) => ({
+            id: record.id,
+            to: `/preserve/builds/${b}/exports/${record.id}`,
+            label: runLabel(record.created_at, record.id),
+            status: record.status,
+          })}
           empty="This capture has not been exported."
         />
       </div>
