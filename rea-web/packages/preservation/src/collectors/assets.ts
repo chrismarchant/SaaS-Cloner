@@ -11,6 +11,8 @@ import {
   blockedOutcome,
   emptyOutcome,
 } from "../runtime.js";
+import { captureObjectSource } from "./assets/s3Collector.js";
+import { planObjectSource } from "./assets/s3Plan.js";
 import {
   type ComponentDeclaration,
   type ComponentPlan,
@@ -26,14 +28,6 @@ import {
 } from "../util.js";
 
 type AssetsDecl = Extract<ComponentDeclaration, { kind: "assets" }>;
-
-const S3_BLOCK: Omission = {
-  what: "S3 object capture",
-  reason:
-    "The S3 collector needs the @aws-sdk/client-s3 dependency, which @rea-web/preservation does not declare.",
-  remediation:
-    "Add @aws-sdk/client-s3 to @rea-web/preservation (package change requested), or capture the bucket by syncing it to a runner-local directory and declaring that path as an assets source.",
-};
 
 export interface ObjectRecord {
   path: string;
@@ -104,41 +98,9 @@ export async function plan(
     feasible: false,
   };
   const src = decl.source;
-  if (src.kind === "s3") {
+  if (src.kind !== "runner_local") {
     out.method = "s3 list+get";
-    const prefix = src.credentials_env_prefix;
-    out.permissions.push({
-      check: `credentials ${prefix}_ACCESS_KEY_ID / ${prefix}_SECRET_ACCESS_KEY`,
-      ok:
-        Boolean(rt.ctx.env[`${prefix}_ACCESS_KEY_ID`]) &&
-        Boolean(rt.ctx.env[`${prefix}_SECRET_ACCESS_KEY`]),
-      detail: "looked up by name; values are not logged",
-    });
-    out.permissions.push({
-      check: "S3 collector dependency available",
-      ok: false,
-      detail: S3_BLOCK.reason,
-    });
-    out.omissions.push(S3_BLOCK);
-    return out;
-  }
-  if (src.kind === "supabase_storage") {
-    out.method = "manual export";
-    out.permissions.push({
-      check: "Supabase Storage export",
-      ok: true,
-      detail:
-        "recorded as a manual prerequisite; objects are not downloaded automatically",
-    });
-    out.omissions.push({
-      what: `Supabase Storage buckets ${src.buckets.join(", ") || "(none listed)"} of project ${src.project_ref}`,
-      reason:
-        "Storage objects are not part of the database backup and no automatic exporter is implemented.",
-      remediation:
-        "Download the bucket objects with the Supabase CLI or an S3 client and place them in a runner-local assets source.",
-    });
-    out.feasible = true;
-    return out;
+    return planObjectSource(src, rt, out);
   }
   const dir = rt.ctx.localPaths.get(src.path_hash);
   if (dir === undefined) {
@@ -196,41 +158,7 @@ export async function capture(
     root,
   };
   const src = decl.source;
-  if (src.kind === "s3")
-    return blockedOutcome({ ...base, method: "s3 list+get" }, S3_BLOCK, {
-      secretNames: [
-        `${src.credentials_env_prefix}_ACCESS_KEY_ID`,
-        `${src.credentials_env_prefix}_SECRET_ACCESS_KEY`,
-      ],
-    });
-  if (src.kind === "supabase_storage") {
-    const what = `Supabase Storage buckets ${src.buckets.join(", ") || "(none listed)"} of project ${src.project_ref}`;
-    const omission = {
-      what,
-      reason:
-        "Storage objects are not part of the database backup and no automatic exporter is implemented.",
-      remediation:
-        "Download the bucket objects with the Supabase CLI or an S3 client and keep them alongside this package, or place them in a runner-local assets source and capture again.",
-    };
-    return {
-      ...emptyOutcome({ ...base, method: "manual export" }),
-      status: "manual",
-      omissions: [omission],
-      manual: [
-        {
-          id: `${cid}:supabase-storage-objects`,
-          title: `Export ${what}`,
-          reason: omission.reason,
-          instructions: omission.remediation,
-          component_id: cid,
-        },
-      ],
-      limitations: [
-        "No object payloads or object listing were captured for this component.",
-      ],
-      details: { project_ref: src.project_ref, buckets: src.buckets },
-    };
-  }
+  if (src.kind !== "runner_local") return captureObjectSource(decl, src, rt);
   const dir = rt.ctx.localPaths.get(src.path_hash);
   if (dir === undefined)
     return blockedOutcome(base, {

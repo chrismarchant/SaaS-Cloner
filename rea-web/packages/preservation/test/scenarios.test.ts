@@ -12,12 +12,17 @@ import { validateRestoreStepArguments } from "@rea-web/contracts";
 import { verifyIntegrity } from "@rea-web/recovery";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  S3_OPTIONS,
+  type S3CaptureOptions,
+} from "../src/collectors/assets/s3Connection.js";
+import {
   type BuildDefinition,
   type CaptureResult,
   capturePackage,
   planPreservation,
   runCommand,
 } from "../src/index.js";
+import { startMockS3 } from "./mockS3.js";
 import {
   DB_ENV_NAME,
   RUNNER_ID,
@@ -48,17 +53,21 @@ describeDb("preservation scenarios", () => {
   const run = async (
     build: BuildDefinition,
     extra: Parameters<typeof makeContext>[2] = {},
-    options: { consistencyWindowMs?: number } = {},
+    options: { consistencyWindowMs?: number; s3?: S3CaptureOptions } = {},
   ) => {
     counter += 1;
     const ws = join(root, `ws${counter}`);
     await mkdir(ws, { recursive: true });
     const tc = makeContext(ws, fx, extra);
+    if (options.s3 !== undefined)
+      Object.assign(tc.ctx, { [S3_OPTIONS]: options.s3 });
     const plan = await planPreservation(build, tc.ctx);
     const result: CaptureResult = await capturePackage(build, plan, tc.ctx, {
       stagingDir: join(root, `pkg${counter}`),
       producerVersion: "0.0.0-test",
-      ...options,
+      ...(options.consistencyWindowMs === undefined
+        ? {}
+        : { consistencyWindowMs: options.consistencyWindowMs }),
     });
     // Every step any capture emits must pass the contract's validator.
     for (const c of result.manifest.components)
@@ -119,7 +128,8 @@ describeDb("preservation scenarios", () => {
       ]);
       const { result, pkg } = await run(build);
       expect(result.componentStatuses["data:db"]).toBe("partial");
-      expect(result.componentStatuses["assets:bucket"]).toBe("manual");
+      // No S3 access keys are configured for the bucket, so it is blocked (not captured).
+      expect(result.componentStatuses["assets:bucket"]).toBe("blocked");
       const titles = result.manifest.manual_prerequisites
         .map((m) => m.title)
         .join(" | ");
@@ -139,7 +149,12 @@ describeDb("preservation scenarios", () => {
       const manual = result.manifest.missing_or_blocked.filter(
         (m) => m.status === "manual",
       );
-      expect(manual.length).toBeGreaterThanOrEqual(6);
+      expect(manual.length).toBeGreaterThanOrEqual(5);
+      expect(
+        result.manifest.missing_or_blocked.find(
+          (m) => m.component_id === "assets:bucket",
+        ),
+      ).toMatchObject({ status: "blocked" });
       for (const m of manual) expect(m.remediation.length).toBeGreaterThan(20);
       expect(
         result.manifest.components.find((c) => c.id === "data:db")?.restore
@@ -159,6 +174,56 @@ describeDb("preservation scenarios", () => {
         /assets:bucket/u,
       );
       expect((await verifyIntegrity(pkg)).ok).toBe(true);
+    });
+  });
+
+  describe("S3 assets in a full build", () => {
+    it("captures the database, a runner_local directory and an S3 bucket in one recovery window", async () => {
+      const s3 = await startMockS3(["media"]);
+      try {
+        s3.put("media", "img/a.png", "png-bytes", "image/png");
+        s3.put("media", "doc.txt", "document\n", "text/plain");
+        const build = base([
+          { kind: "source", id: "main" },
+          fullBuild(fx).components.find((c) => c.kind === "data")!,
+          assetsDecl(),
+          {
+            kind: "assets",
+            id: "media",
+            source: {
+              kind: "s3",
+              bucket: "media",
+              prefix: "",
+              endpoint_env_name: "FIXTURE_S3_ENDPOINT",
+              credentials_env_prefix: "FIXTURE_S3",
+            },
+          },
+        ]);
+        const { result, pkg } = await run(
+          build,
+          {
+            env: {
+              FIXTURE_S3_ENDPOINT: s3.endpoint,
+              FIXTURE_S3_ACCESS_KEY_ID: "AKIAFULLBUILD000001",
+              FIXTURE_S3_SECRET_ACCESS_KEY: "full-build-secret-key-value-0001",
+            },
+          },
+          { s3: { allowLoopbackEndpoint: true, maxAttempts: 1 } },
+        );
+        expect(result.componentStatuses["assets:media"]).toBe("captured");
+        expect(result.componentStatuses["assets:uploads"]).toBe("partial");
+        expect(result.componentStatuses["data:db"]).toBe("captured");
+        expect(result.consistency).toBe("single_point");
+        expect(
+          await readFile(join(pkg, "assets/media/objects/img/a.png"), "utf8"),
+        ).toBe("png-bytes");
+        expect(await readdir(join(pkg, "assets/uploads"))).toContain(
+          "objects.json",
+        );
+        expect((await verifyIntegrity(pkg)).ok).toBe(true);
+      } finally {
+        await s3.close();
+      }
     });
   });
 

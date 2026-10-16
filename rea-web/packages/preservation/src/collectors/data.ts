@@ -114,7 +114,7 @@ const supabaseGaps = (
       reason:
         storage === undefined
           ? "Storage object payloads live outside the database; the dump holds only the storage.objects metadata rows."
-          : `Storage payloads are covered by the assets component ${componentId(storage)}, which is a manual prerequisite and is not captured automatically.`,
+          : `Storage payloads are captured by the assets component ${componentId(storage)} through the Storage S3 endpoint; check its status, because bucket settings and policies are not captured.`,
       instructions:
         "Download every bucket's objects (for example with the Supabase CLI or an S3-compatible client against the project's Storage S3 endpoint) and re-upload them after restore. Compare against the storage.objects rows in the dump.",
     },
