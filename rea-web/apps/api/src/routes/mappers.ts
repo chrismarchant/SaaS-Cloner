@@ -96,6 +96,7 @@ export const targetView = (t: TargetRecord): Out<typeof targetSchema> => ({
   size: t.size,
   url: t.url,
   runner_id: t.runner_id,
+  path_hash: t.kind === "runner_local" ? t.runner_path_hash : null,
   metadata: t.metadata,
   created_by: t.created_by,
   created_at: t.created_at,

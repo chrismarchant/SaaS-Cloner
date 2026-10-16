@@ -83,5 +83,23 @@ describe("preservation source boundary", () => {
     ]);
     expect(names.secret).toEqual(["APP_DATABASE_URL"]);
     expect(names.plain).not.toContain("REA_WEB_RUNNER_TOKEN");
+    const storage = declaredEnvironment([
+      {
+        kind: "assets",
+        id: "files",
+        source: {
+          kind: "supabase_storage",
+          project_ref: "abcd",
+          buckets: ["avatars"],
+          credentials_env_prefix: "SB",
+        },
+      },
+    ]);
+    expect(storage.secret).toEqual(
+      expect.arrayContaining(["SB_ACCESS_KEY_ID", "SB_SECRET_ACCESS_KEY"]),
+    );
+    expect(storage.plain).toEqual(
+      expect.arrayContaining(["SB_REGION", "SB_ENDPOINT"]),
+    );
   });
 });

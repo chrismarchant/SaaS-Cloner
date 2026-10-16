@@ -231,6 +231,8 @@ export const unmetRequirements = (
 
 export const registerResponseSchema = z.object({
   runner_id: z.string(),
+  /** The project this runner's token belongs to (server-owned fact). */
+  project_id: z.string(),
   server_time: z.string(),
   protocol_version: z.literal(RUNNER_PROTOCOL_VERSION),
   lease_ttl_ms: z.number().int().positive(),
@@ -353,3 +355,6 @@ export const localTargetRegistrationSchema = z.object({
     }),
   ),
 });
+export type LocalTargetRegistration = z.infer<
+  typeof localTargetRegistrationSchema
+>;

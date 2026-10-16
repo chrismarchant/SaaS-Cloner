@@ -175,6 +175,8 @@ export const targetSchema = z.object({
   size: z.number().int().nonnegative().nullable(),
   url: z.string().nullable(),
   runner_id: idSchema.nullable(),
+  /** For runner_local targets: the allowlist hash that names the path on its runner. */
+  path_hash: z.string().length(64).nullable(),
   metadata: z.record(z.string(), z.unknown()),
   created_by: idSchema.nullable(),
   created_at: timestampSchema,
@@ -231,6 +233,40 @@ export const executionPolicySchema = z.object({
   budget: jobBudgetSchema.partial().default({}),
 });
 export type ExecutionPolicy = z.infer<typeof executionPolicySchema>;
+
+/** A routing table entry (see routing.ts ROUTE_TABLE) as carried in job inputs. */
+export const routeEntrySchema = z.object({
+  class: targetClassSchema,
+  first_tool: z.string().nullable(),
+  requires_open_binary: z.boolean(),
+  required_tools: z.array(z.string()),
+  required_providers_any_of: z.array(z.string()),
+  required_os: z.array(z.enum(["linux", "darwin", "win32"])),
+  rationale: z.string(),
+});
+
+/**
+ * Input of an `investigation.run` job, written by the API and read by the
+ * runner. A `runner_local` target carries its `path_hash`; the runner
+ * resolves it through its own allowlist and never downloads it.
+ */
+export const investigationJobInputSchema = z.object({
+  investigation_id: idSchema,
+  target_id: idSchema,
+  target: z.object({
+    kind: targetKindSchema,
+    class: targetClassSchema,
+    name: z.string(),
+    sha256: z.string().length(64).nullable(),
+    size: z.number().int().nonnegative().nullable(),
+    url: z.string().nullable(),
+    path_hash: z.string().length(64).nullable(),
+  }),
+  question: z.string(),
+  policy: executionPolicySchema,
+  route: routeEntrySchema,
+});
+export type InvestigationJobInput = z.infer<typeof investigationJobInputSchema>;
 
 export const createInvestigationRequestSchema = z.object({
   target_id: idSchema,

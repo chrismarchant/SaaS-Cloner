@@ -22,3 +22,11 @@ export const resolveLocalPaths = async (
   }
   return map;
 };
+
+/** A runner-local path the job names is not on this runner's allowlist. */
+export class LocalPathUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalPathUnavailableError";
+  }
+}

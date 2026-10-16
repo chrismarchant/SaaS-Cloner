@@ -1,6 +1,7 @@
 import {
   ApiError,
   compareJobInputSchema,
+  investigationJobInputSchema,
   type JobState,
   routeFor,
   unmetRequirements,
@@ -147,7 +148,7 @@ export const investigationHandlers = (): HandlersFor<
             effects: [],
           },
           budget: mergeBudget(policy.budget),
-          input: {
+          input: investigationJobInputSchema.parse({
             investigation_id: investigationId,
             target_id: target.id,
             target: {
@@ -157,18 +158,14 @@ export const investigationHandlers = (): HandlersFor<
               sha256: target.sha256,
               size: target.size,
               url: target.url,
+              // Runner-local targets are resolved by the runner itself.
+              path_hash:
+                target.kind === "runner_local" ? target.runner_path_hash : null,
             },
             question: body.question,
             policy,
-            route: {
-              first_tool: route.first_tool,
-              requires_open_binary: route.requires_open_binary,
-              required_tools: [...route.required_tools],
-              required_providers_any_of: [...route.required_providers_any_of],
-              required_os: [...route.required_os],
-              rationale: route.rationale,
-            },
-          },
+            route,
+          }),
           preferred_runner_id: preferred,
         },
         client,

@@ -29,7 +29,11 @@ import {
   SourceRefusedError,
   type PreservationDeps,
 } from "./preservation/execute.js";
-import { resolveLocalPaths } from "./preservation/localPaths.js";
+import {
+  LocalPathUnavailableError,
+  resolveLocalPaths,
+} from "./preservation/localPaths.js";
+import { describeLocalTargets } from "./preservation/localTargets.js";
 import { runRecoveryVerify } from "./recovery/verifyPackage.js";
 import { RUNNER_VERSION } from "./version.js";
 export { RUNNER_VERSION };
@@ -116,6 +120,16 @@ export class Runner {
       tools: report.tools_list.length,
       rea_unavailable_reason: report.rea_unavailable_reason,
     });
+    // Allowlisted paths become runner-local targets the UI can pick; only
+    // their path_hash, name, class, size and digest leave this host.
+    if (this.deps.config.localTargetAllowlist.length > 0) {
+      const local = await describeLocalTargets(
+        this.deps.config.localTargetAllowlist,
+        registered.project_id,
+      );
+      const count = await this.client.registerLocalTargets(local);
+      this.deps.log("info", "local targets registered", { count });
+    }
     this.keeper = new LeaseKeeper(
       this.client,
       registered.heartbeat_interval_ms,
@@ -238,7 +252,20 @@ export class Runner {
         const input = parseInvestigationInput(job.input);
         investigationId = input.investigation_id;
         let targetPath: string | null = null;
-        if (input.target.kind !== "url") {
+        if (input.target.kind === "runner_local") {
+          // Resolved here, through this runner's allowlist; never downloaded.
+          const local = await resolveLocalPaths(
+            this.deps.config.localTargetAllowlist,
+          );
+          targetPath =
+            input.target.path_hash === null
+              ? null
+              : (local.get(input.target.path_hash) ?? null);
+          if (targetPath === null)
+            throw new LocalPathUnavailableError(
+              `runner-local target ${input.target.name} is not on this runner's allowlist`,
+            );
+        } else if (input.target.kind !== "url") {
           await mkdir(join(ctx.workspace, "target"), { recursive: true });
           const safeName =
             input.target.name.replace(/[^A-Za-z0-9._-]/gu, "_").slice(0, 200) ||
@@ -404,34 +431,41 @@ export class Runner {
             details: { dimension: reason.dimension },
             retryable: false,
           }
-        : error instanceof ExportRefusedError
+        : error instanceof LocalPathUnavailableError
           ? {
               code: "capability_unavailable",
               message: error.message,
+              details: { reason: "local_path_not_allowlisted" },
               retryable: false,
             }
-          : error instanceof SourceRefusedError
+          : error instanceof ExportRefusedError
             ? {
-                code: "unsafe_url",
+                code: "capability_unavailable",
                 message: error.message,
                 retryable: false,
               }
-            : error instanceof SessionClosedError
+            : error instanceof SourceRefusedError
               ? {
-                  code: "capability_unavailable",
+                  code: "unsafe_url",
                   message: error.message,
-                  details: { reason: "session_closed" },
                   retryable: false,
                 }
-              : {
-                  code: "runner_error",
-                  message: this.redactor
-                    .redactText(
-                      error instanceof Error ? error.message : String(error),
-                    )
-                    .slice(0, 2000),
-                  retryable: false,
-                };
+              : error instanceof SessionClosedError
+                ? {
+                    code: "capability_unavailable",
+                    message: error.message,
+                    details: { reason: "session_closed" },
+                    retryable: false,
+                  }
+                : {
+                    code: "runner_error",
+                    message: this.redactor
+                      .redactText(
+                        error instanceof Error ? error.message : String(error),
+                      )
+                      .slice(0, 2000),
+                    retryable: false,
+                  };
     await this.finish(ctx, "failed", null, failure, cleanup);
   }
 

@@ -162,6 +162,7 @@ export const runnerProtocolHandlers = (): HandlersFor<
       throw new ApiError("unauthorized", "Runner is revoked");
     return {
       runner_id: runner.runner.id,
+      project_id: runner.runner.project_id,
       server_time: ctx.now().toISOString(),
       protocol_version: RUNNER_PROTOCOL_VERSION,
       lease_ttl_ms: ctx.config.leaseTtlMs,

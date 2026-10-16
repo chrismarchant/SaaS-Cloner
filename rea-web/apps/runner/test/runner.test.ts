@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { routeFor } from "@rea-web/contracts";
+import { routeFor, uuidv7 } from "@rea-web/contracts";
 import { processAlive } from "@rea-web/rea-adapter";
 import {
   createDisabledProvider,
@@ -60,7 +60,8 @@ const investigation = (
   name: string,
   extra: Record<string, unknown> = {},
 ) => ({
-  investigation_id: `inv-${Math.random().toString(16).slice(2)}`,
+  investigation_id: uuidv7(),
+  target_id: uuidv7(),
   target: {
     kind: "upload",
     class: cls,
@@ -68,6 +69,7 @@ const investigation = (
     sha256: null,
     size: null,
     url: null,
+    path_hash: null,
   },
   question: "What does this application do and where does it store data?",
   policy: { model_follow_up: false, ...extra },
@@ -229,7 +231,7 @@ describeIfBuilt("Runner against the real upstream REA server", () => {
 
     // a follow-up for an investigation without a live session fails explicitly
     const orphan = control.enqueue("investigation.follow_up", {
-      investigation_id: "inv-none",
+      investigation_id: uuidv7(),
       tool: "binary_session",
       arguments: {},
     });

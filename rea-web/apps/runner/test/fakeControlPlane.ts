@@ -191,6 +191,7 @@ export class FakeControlPlane {
       this.report = json() as unknown as CapabilityReport;
       return this.send(res, 200, {
         runner_id: "0192f1a0-0000-7000-8000-00000000aaaa",
+        project_id: "0192f1a0-0000-7000-8000-00000000bbbb",
         server_time: new Date().toISOString(),
         protocol_version: 1,
         lease_ttl_ms: 60_000,

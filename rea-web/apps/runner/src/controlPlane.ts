@@ -8,6 +8,7 @@ import {
   heartbeatResponseSchema,
   jobSchema,
   registerResponseSchema,
+  type LocalTargetRegistration,
   type CapabilityReport,
   type ClaimResponse,
   type CleanupReport,
@@ -111,6 +112,18 @@ export class ControlPlaneClient {
     if (!result) throw new Error("register returned no body");
     this.runnerId = result.runner_id;
     return result;
+  }
+
+  /** Register this runner's allowlisted paths as runner-local targets. */
+  async registerLocalTargets(body: LocalTargetRegistration): Promise<number> {
+    if (!this.runnerId) throw new Error("register before registering targets");
+    const result = await this.request(
+      "POST",
+      `/runners/${this.runnerId}/local-targets`,
+      body,
+      (v) => (v as { items?: unknown[] } | null)?.items?.length ?? 0,
+    );
+    return result ?? 0;
   }
 
   claim(waitMs: number, signal?: AbortSignal): Promise<ClaimResponse | null> {

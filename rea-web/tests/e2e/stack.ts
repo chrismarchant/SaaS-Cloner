@@ -91,7 +91,7 @@ export class Stack {
   cookie = "";
   runnerToken = "";
   private api: OwnedProcess | null = null;
-  private runner: OwnedProcess | null = null;
+  private readonly runners: OwnedProcess[] = [];
   private scratch = "";
   private databaseName = "";
   private databaseUrl = "";
@@ -136,28 +136,34 @@ export class Stack {
     }, 60_000);
   }
 
-  /** Start the runner process with the token of a runner created in the API. */
+  /**
+   * Start a runner process with the token of a runner created in the API.
+   * Several runners may run at once; each gets its own home and workspace.
+   */
   startRunner(token: string, extraEnv: Record<string, string> = {}): void {
     this.runnerToken = token;
-    this.runner = start(
+    const n = this.runners.length;
+    const suffix = n === 0 ? "" : `-${n}`;
+    const runner = start(
       RUNNER_MAIN,
       {
         PATH: process.env["PATH"] ?? "",
-        HOME: join(this.scratch, "runner-home"),
+        HOME: join(this.scratch, `runner-home${suffix}`),
         REA_WEB_API_URL: this.apiUrl,
         REA_WEB_RUNNER_TOKEN: token,
         REA_WEB_RUNNER_NAME: "e2e-linux",
-        REA_WEB_RUNNER_WORKSPACE_ROOT: join(this.scratch, "runner-ws"),
+        REA_WEB_RUNNER_WORKSPACE_ROOT: join(this.scratch, `runner-ws${suffix}`),
         REA_WEB_REA_ROOT: REA_ROOT,
         REA_WEB_MODEL_PROVIDER: "disabled",
         ...extraEnv,
       },
       this.scratch,
     );
+    this.runners.push(runner);
   }
 
   get logs(): string {
-    return `${this.api?.output() ?? ""}\n${this.runner?.output() ?? ""}`;
+    return [this.api, ...this.runners].map((p) => p?.output() ?? "").join("\n");
   }
 
   async request<T = any>(
@@ -219,7 +225,7 @@ export class Stack {
   }
 
   async stop(): Promise<void> {
-    await stop(this.runner);
+    for (const runner of this.runners) await stop(runner);
     await stop(this.api);
     if (this.databaseName) {
       const admin = new pg.Client({ connectionString: TEST_DATABASE_URL });

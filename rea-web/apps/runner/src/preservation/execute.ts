@@ -59,8 +59,10 @@ export const declaredEnvironment = (
         "KEY",
       ])
         secret.add(`${prefix}_${suffix}`);
+      plain.add(`${prefix}_REGION`);
       if (c.source.kind === "s3" && c.source.endpoint_env_name)
         plain.add(c.source.endpoint_env_name);
+      if (c.source.kind === "supabase_storage") plain.add(`${prefix}_ENDPOINT`);
     }
   }
   return { secret: [...secret], plain: [...plain] };

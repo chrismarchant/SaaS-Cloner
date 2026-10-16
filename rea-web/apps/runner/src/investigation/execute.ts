@@ -2,6 +2,8 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   executionPolicySchema,
+  investigationJobInputSchema,
+  type InvestigationJobInput,
   routeFor,
   type ExecutionPolicy,
   type RouteEntry,
@@ -28,38 +30,11 @@ import {
 import { planSteps, unsupportedClassReason, type PlannedStep } from "./plan.js";
 import { guardedCall, type GuardedCall } from "./toolRunner.js";
 
-export interface InvestigationInput {
-  readonly investigation_id: string;
-  readonly target: {
-    readonly kind: string;
-    readonly class: TargetClass;
-    readonly name: string;
-    readonly sha256: string | null;
-    readonly size: number | null;
-    readonly url: string | null;
-  };
-  readonly question: string;
-  readonly policy: ExecutionPolicy;
-  readonly route: RouteEntry;
-}
+export type InvestigationInput = InvestigationJobInput;
 
 export const parseInvestigationInput = (
   input: Record<string, unknown>,
-): InvestigationInput => {
-  const target = input["target"] as InvestigationInput["target"] | undefined;
-  if (typeof input["investigation_id"] !== "string" || !target)
-    throw new Error(
-      "investigation job input is missing investigation_id or target",
-    );
-  const targetClass = (target.class ?? "unknown") as TargetClass;
-  return {
-    investigation_id: input["investigation_id"],
-    target: { ...target, class: targetClass },
-    question: typeof input["question"] === "string" ? input["question"] : "",
-    policy: executionPolicySchema.parse(input["policy"] ?? {}),
-    route: (input["route"] as RouteEntry | undefined) ?? routeFor(targetClass),
-  };
-};
+): InvestigationInput => investigationJobInputSchema.parse(input);
 
 /** Tools the model may use: routed tools plus read-oriented evidence tools, filtered by live availability. */
 const MODEL_TOOL_CANDIDATES = [
