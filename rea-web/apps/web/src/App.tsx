@@ -12,6 +12,13 @@ import { InvestigationsPage } from "./routes/InvestigationsPage";
 import { NewInvestigationPage } from "./routes/NewInvestigationPage";
 import { RunnersPage } from "./routes/RunnersPage";
 import { TargetsPage } from "./routes/TargetsPage";
+import { BuildDetail } from "./routes/preserve/BuildDetail";
+import { BuildsPage } from "./routes/preserve/BuildsPage";
+import { CapturePage } from "./routes/preserve/CapturePage";
+import { ExportNewPage, ExportPage } from "./routes/preserve/ExportPages";
+import { NewBuildPage } from "./routes/preserve/NewBuildPage";
+import { PlanPage } from "./routes/preserve/PlanPage";
+import { VerificationPage, VerifyNewPage } from "./routes/preserve/VerifyPages";
 
 export function App() {
   const me = useMe();
@@ -45,6 +52,30 @@ export function App() {
           <Route path="runners" element={<RunnersPage />} />
           <Route path="runners/:id" element={<CapabilitiesPage />} />
           <Route path="compare" element={<ComparePage />} />
+          <Route path="preserve" element={<BuildsPage />} />
+          <Route path="preserve/new" element={<NewBuildPage />} />
+          <Route path="preserve/builds/:b" element={<BuildDetail />} />
+          <Route path="preserve/builds/:b/plans/:pl" element={<PlanPage />} />
+          <Route
+            path="preserve/builds/:b/captures/:c"
+            element={<CapturePage />}
+          />
+          <Route
+            path="preserve/builds/:b/captures/:c/verify"
+            element={<VerifyNewPage />}
+          />
+          <Route
+            path="preserve/builds/:b/captures/:c/verifications/:v"
+            element={<VerificationPage />}
+          />
+          <Route
+            path="preserve/builds/:b/captures/:c/export"
+            element={<ExportNewPage />}
+          />
+          <Route
+            path="preserve/builds/:b/exports/:e"
+            element={<ExportPage />}
+          />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
