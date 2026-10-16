@@ -2,6 +2,22 @@
 
 Updated at each gate checkpoint. Newest first.
 
+## Checkpoint: all gates complete — 2026-10-16
+
+- **SHA**: last code commit `f758af9a6`. The final report is `docs/FINAL-REPORT.md`, in the commit after it.
+- **G05**: companion runners register allowlisted paths as `runner_local` targets by `path_hash`. Their investigations run only on that runner, resolved locally (`tests/e2e/companion.test.ts`, 2/2). `docs/HOST-ROUTING.md` is generated from probes, and `docs/COMPANION-RUNNER.md` is added.
+- **G06**:
+  - S3 and Supabase Storage asset capture (mock S3 only).
+  - Platform-config collectors for Railway, Fly, Vercel, Netlify, Procfile and Supabase config.
+  - Detached Ed25519 export signatures, checked by `rea-recover` before unpacking.
+  - Base images pinned by digest (from mirror.gcr.io).
+  - Preserve & restore UI and its list, report and signature routes (`tests/e2e/ui-preserve.test.ts`, 10/10).
+- **Defects fixed in this round**:
+  - Investigations of runner-local targets analysed a JSON metadata document instead of the target. The investigation input is now a contract with `path_hash`, resolved by the runner.
+  - The `9ab09efd0` commit accidentally included a deletion staged by a concurrent agent, so the web app did not build at that commit. `01ce38007` completes it.
+- **Totals**: 769 unit and integration tests, plus 46 end-to-end tests, all passing on 2026-10-16.
+- **Review**: Codex packages 1 to 4 are prepared. None has been performed.
+
 ## Checkpoint: G02 complete — 2026-10-13 01:10 UTC
 
 - **SHA**: `3d4e430a2` (pushed).
