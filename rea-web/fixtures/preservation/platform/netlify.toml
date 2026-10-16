@@ -1,0 +1,40 @@
+[build]
+base = "web"
+command = "npm run build"
+publish = "dist"
+functions = "netlify/functions"
+
+[build.environment]
+NODE_VERSION = "22"
+NEXT_PUBLIC_SITE_URL = "https://www.acme.example"
+
+[context.deploy-preview]
+command = "npm run build:preview"
+
+[functions]
+node_bundler = "esbuild"
+
+[functions."nightly-report"]
+schedule = "@daily"
+
+[functions."sync-crm"]
+schedule = "*/15 * * * *"
+
+[[redirects]]
+from = "/api/*"
+to = "https://api.acme.example/:splat"
+status = 200
+
+[[redirects]]
+from = "/blog/*"
+to = "/news/:splat"
+status = 301
+
+[[headers]]
+for = "/*"
+
+[headers.values]
+X-Content-Type-Options = "nosniff"
+
+[[plugins]]
+package = "@netlify/plugin-lighthouse"

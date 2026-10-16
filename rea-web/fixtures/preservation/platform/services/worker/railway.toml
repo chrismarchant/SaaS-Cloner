@@ -1,0 +1,13 @@
+# Railway config for the queue worker.
+[build]
+builder = "RAILPACK"
+buildCommand = "npm run build:worker"
+watchPatterns = ["services/worker/**"]
+
+[deploy]
+startCommand = "node dist/worker.js"
+healthcheckPath = "/ready"
+healthcheckTimeout = 30
+restartPolicyType = "ALWAYS"
+numReplicas = 1
+region = "europe-west4-drams3a"

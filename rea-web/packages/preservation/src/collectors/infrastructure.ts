@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { RestoreStep } from "@rea-web/contracts";
+import type { Redactor, RestoreStep } from "@rea-web/contracts";
 import {
   type InfrastructureDescriptor,
   infrastructureDescriptorSchema,
@@ -19,6 +19,9 @@ import {
   type Omission,
   componentId,
 } from "../types.js";
+import { type PlatformMerge, mergePlatform } from "./platform/merge.js";
+import { scanPlatformConfig } from "./platform/scan.js";
+import type { PlatformScan } from "./platform/types.js";
 import {
   type TreeEntry,
   componentRoot,
@@ -75,9 +78,12 @@ export interface EnvNameSource {
     | "code"
     | "env_example"
     | "dockerfile"
-    | "data_connection";
+    | "data_connection"
+    | "platform_config";
   file?: string;
   store?: string;
+  /** Where in the file the name appears (platform configuration only). */
+  key?: string;
 }
 
 export interface SourceScan {
@@ -95,7 +101,12 @@ const addName = (
   const list = map.get(name) ?? [];
   if (
     list.length < 6 &&
-    !list.some((s) => s.kind === source.kind && s.file === source.file)
+    !list.some(
+      (s) =>
+        s.kind === source.kind &&
+        s.file === source.file &&
+        s.key === source.key,
+    )
   )
     list.push(source);
   map.set(name, list);
@@ -194,7 +205,8 @@ export async function plan(
     ],
     estimated_bytes: null,
     dependencies: source === undefined ? [] : [componentId(source)],
-    method: "descriptor validation plus env-name scan of the captured checkout",
+    method:
+      "descriptor validation, env-name scan and platform-config parse of the captured checkout",
     omissions:
       source === undefined
         ? [
@@ -213,6 +225,98 @@ export async function plan(
 const withSourceCwd = (rt: Runtime, srcId: string | null): string =>
   srcId === null ? "{{target}}" : `{{target}}/${srcId}`;
 
+interface FilesInput {
+  stage: string;
+  root: string;
+  redactor: Redactor;
+  descriptor: InfrastructureDescriptor;
+  platform: PlatformMerge;
+  detectedPlatformConfig: string[];
+  names: { name: string; sources: EnvNameSource[] }[];
+}
+
+/** User-descriptor entries are tagged so platform-config entries can sit beside them. */
+const FROM_DESCRIPTOR = { source: "descriptor", confidence: "declared" };
+
+async function writeFiles(input: FilesInput): Promise<void> {
+  const { descriptor: d, platform } = input;
+  const j = (rel: string, value: unknown) =>
+    writeStaged(
+      input.stage,
+      `${input.root}${rel}`,
+      jsonText(value, input.redactor),
+    );
+  await j("services.json", {
+    services: [
+      ...d.services.map((s) => ({ ...s, ...FROM_DESCRIPTOR })),
+      ...platform.services,
+    ],
+    conflicts: platform.conflicts,
+    detected_platform_config: input.detectedPlatformConfig,
+  });
+  await j("env-names.json", {
+    note: "Names only. Values are never exported.",
+    names: input.names,
+  });
+  await j("schedules.json", {
+    schedules: [
+      ...d.schedules.map((x) => ({ ...x, ...FROM_DESCRIPTOR })),
+      ...platform.schedules,
+    ],
+  });
+  await j("domains.json", { domains: d.domains });
+  await j("health.json", {
+    checks: [
+      ...d.services
+        .filter((s) => s.health_check !== null)
+        .map((s) => ({
+          service: s.name,
+          ...s.health_check,
+          ...FROM_DESCRIPTOR,
+        })),
+      ...platform.health,
+    ],
+  });
+  await j("behavior-checks.json", { checks: d.behavior_checks });
+  if (platform.platformJson !== null)
+    await j("platform.json", platform.platformJson);
+}
+
+function restoreSteps(
+  d: InfrastructureDescriptor,
+  platformSteps: RestoreStep[],
+  sourceCwd: string,
+): RestoreStep[] {
+  const steps: RestoreStep[] = [];
+  for (const s of d.services)
+    if (s.build_command !== null)
+      steps.push(
+        stepOf({
+          id: `infra-${s.name}-build`.replace(/[^A-Za-z0-9_-]/gu, "_"),
+          title: `Build service ${s.name}`,
+          run: s.build_command,
+          cwd: sourceCwd,
+          requires: [s.build_command[0] as string],
+          network: "none",
+          scope: "clean_build",
+        }),
+      );
+  steps.push(...platformSteps);
+  for (const c of d.behavior_checks)
+    steps.push(
+      stepOf({
+        id: `behavior-${c.id}`.replace(/[^A-Za-z0-9_.-]/gu, "_"),
+        title: c.title,
+        run: c.run,
+        cwd: c.cwd === "source" ? sourceCwd : "{{package_root}}",
+        requires: [c.run[0] as string],
+        network: "none",
+        scope: "behavior",
+      }),
+    );
+  return steps;
+}
+
 export async function capture(
   decl: InfraDecl,
   rt: CaptureRuntime,
@@ -221,7 +325,8 @@ export async function capture(
   const root = componentRoot(rt.build, decl);
   const base = {
     title: `Infrastructure (${decl.id})`,
-    method: "declared descriptor + env-name scan of captured checkout",
+    method:
+      "declared descriptor + env-name scan and platform-config parse of captured checkout",
     root,
   };
   const parsed = parseDescriptor(
@@ -250,9 +355,13 @@ export async function capture(
     scanned: 0,
     truncated: false,
   };
+  let platformScan: PlatformScan = { files: [], unread: [] };
   if (co.ok) {
     const tree = await listTree(co.dir);
     scan = await scanEnvNames(tree.files);
+    platformScan = await scanPlatformConfig(tree, {
+      redact: (text) => rt.ctx.redactor.redactText(text),
+    });
     if (scan.truncated)
       limitations.push("Environment-name scan stopped after 20000 files.");
   } else
@@ -262,8 +371,31 @@ export async function capture(
       remediation: co.remediation,
     });
 
+  const stage = await rt.stageDir(cid);
+  const srcInfo = co.ok
+    ? { declId: co.sourceDeclId, componentId: co.sourceComponentId }
+    : ([...rt.sources.values()][0] ?? null);
+  const srcDeclId = srcInfo?.declId ?? null;
+  const sourceCwd = withSourceCwd(rt, srcDeclId);
+  const platform = mergePlatform({
+    cid,
+    scan: platformScan,
+    descriptor: d,
+    sourceCwd,
+    redact: (text) => rt.ctx.redactor.redactText(text),
+  });
+  omissions.push(...platform.omissions);
+  limitations.push(...platform.limitations);
+  const handled = new Set(platformScan.files.map((f) => f.path));
+  const unparsedFormats = scan.platformFiles.filter((f) => !handled.has(f));
+  if (unparsedFormats.length > 0)
+    limitations.push(
+      `Platform files detected but not interpreted (no parser for this format): ${unparsedFormats.join(", ")}.`,
+    );
+
   const names = new Map(scan.names);
   for (const n of d.env_names) addName(names, n, { kind: "declared" });
+  for (const e of platform.envNames) addName(names, e.name, e.source);
   for (const s of d.secret_refs)
     addName(names, s.name, { kind: "secret_ref", store: s.store });
   for (const c of rt.build.components)
@@ -273,61 +405,22 @@ export async function capture(
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([name, sources]) => ({ name, sources }));
 
-  const stage = await rt.stageDir(cid);
-  const j = (rel: string, value: unknown) =>
-    writeStaged(stage, `${root}${rel}`, jsonText(value, rt.ctx.redactor));
-  await j("services.json", {
-    services: d.services,
-    detected_platform_config: scan.platformFiles,
-  });
-  await j("env-names.json", {
-    note: "Names only. Values are never exported.",
+  await writeFiles({
+    stage,
+    root,
+    redactor: rt.ctx.redactor,
+    descriptor: d,
+    platform,
+    detectedPlatformConfig: scan.platformFiles,
     names: nameList,
   });
-  await j("schedules.json", { schedules: d.schedules });
-  await j("domains.json", { domains: d.domains });
-  await j("health.json", {
-    checks: d.services
-      .filter((s) => s.health_check !== null)
-      .map((s) => ({ service: s.name, ...s.health_check })),
-  });
-  await j("behavior-checks.json", { checks: d.behavior_checks });
 
-  const srcInfo = co.ok
-    ? { declId: co.sourceDeclId, componentId: co.sourceComponentId }
-    : ([...rt.sources.values()][0] ?? null);
-  const srcDeclId = srcInfo?.declId ?? null;
-  const sourceCwd = withSourceCwd(rt, srcDeclId);
-  const steps: RestoreStep[] = [];
-  for (const s of d.services)
-    if (s.build_command !== null)
-      steps.push(
-        stepOf({
-          id: `infra-${s.name}-build`.replace(/[^A-Za-z0-9_-]/gu, "_"),
-          title: `Build service ${s.name}`,
-          run: s.build_command,
-          cwd: sourceCwd,
-          requires: [s.build_command[0] as string],
-          network: "none",
-          scope: "clean_build",
-        }),
-      );
-  for (const c of d.behavior_checks)
-    steps.push(
-      stepOf({
-        id: `behavior-${c.id}`.replace(/[^A-Za-z0-9_.-]/gu, "_"),
-        title: c.title,
-        run: c.run,
-        cwd: c.cwd === "source" ? sourceCwd : "{{package_root}}",
-        requires: [c.run[0] as string],
-        network: "none",
-        scope: "behavior",
-      }),
-    );
+  const steps = restoreSteps(d, platform.steps, sourceCwd);
 
   const hosts = unique([
     ...d.domains.map((x) => x.host.toLowerCase()),
     ...hostnamesIn(decl.descriptor),
+    ...platform.blockedHosts,
   ]);
   const outcome = emptyOutcome(base);
   return {
@@ -339,9 +432,13 @@ export async function capture(
     capturedAt: { start: start.toISOString(), end: rt.now().toISOString() },
     stageDir: stage,
     secretNames: nameList.map((n) => n.name),
+    manual: platform.manual,
     guards: {
       blocked_hosts: hosts,
-      disabled_schedules: d.schedules.map((s) => s.name),
+      disabled_schedules: unique([
+        ...d.schedules.map((s) => s.name),
+        ...platform.scheduleNames,
+      ]),
     },
     relationships:
       srcInfo === null
@@ -356,6 +453,7 @@ export async function capture(
       secret_refs: d.secret_refs.map((s) => ({ name: s.name, store: s.store })),
       behavior_checks: d.behavior_checks.map((c) => c.id),
       detected_platform_config: scan.platformFiles,
+      platform_config: platform.details,
       env_values_exported: false,
     },
   };

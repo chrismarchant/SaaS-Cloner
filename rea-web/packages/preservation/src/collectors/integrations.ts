@@ -29,6 +29,9 @@ import {
   writeStaged,
 } from "../util.js";
 import { readFile } from "node:fs/promises";
+import { supabaseSummary } from "./platform/guidance.js";
+import { scanPlatformConfig } from "./platform/scan.js";
+import type { SupabaseFacts } from "./platform/types.js";
 
 type IntegDecl = Extract<ComponentDeclaration, { kind: "integrations" }>;
 
@@ -138,6 +141,38 @@ async function detect(files: TreeEntry[]): Promise<Detected[]> {
   return [...found.values()].sort((a, b) => (a.provider < b.provider ? -1 : 1));
 }
 
+const SUPABASE_CONFIG_EVIDENCE = "supabase/config.toml";
+
+/** A parsed supabase/config.toml is evidence for the Supabase integration, even without an SDK dependency. */
+const withSupabaseConfig = (
+  detected: Detected[],
+  configs: readonly SupabaseFacts[],
+): Detected[] => {
+  if (configs.length === 0) return detected;
+  const evidence = configs.map((c) => ({
+    file: c.path,
+    dependency: SUPABASE_CONFIG_EVIDENCE,
+  }));
+  const existing = detected.find((d) => d.provider === "Supabase");
+  if (existing === undefined)
+    return [...detected, { provider: "Supabase", evidence }].sort((a, b) =>
+      a.provider < b.provider ? -1 : 1,
+    );
+  return detected.map((d) =>
+    d === existing
+      ? { ...d, evidence: [...d.evidence, ...evidence].slice(0, 8) }
+      : d,
+  );
+};
+
+/** Parsed platform configuration that belongs to a provider; only Supabase has any. */
+const configFor = (
+  provider: string,
+  configs: readonly SupabaseFacts[],
+): { platform_config: SupabaseFacts[] } => ({
+  platform_config: norm(provider).includes("supabase") ? [...configs] : [],
+});
+
 export async function plan(
   decl: IntegDecl,
   rt: Runtime,
@@ -197,8 +232,24 @@ export async function capture(
   const omissions: Omission[] = [];
   const co = await rt.checkout(null);
   let detected: Detected[] = [];
-  if (co.ok) detected = await detect((await listTree(co.dir)).files);
-  else
+  let supabaseConfigs: SupabaseFacts[] = [];
+  const limitations = [
+    "Provider-side state (accounts, keys, OAuth apps, webhook registrations) is not captured; see manual prerequisites.",
+    "Inferred providers come from dependency names only.",
+  ];
+  if (co.ok) {
+    const tree = await listTree(co.dir);
+    detected = await detect(tree.files);
+    const configs = await scanPlatformConfig(tree, { only: ["supabase"] });
+    supabaseConfigs = configs.files.flatMap((f) =>
+      f.extraction?.supabase == null ? [] : [f.extraction.supabase],
+    );
+    for (const f of configs.files.filter((x) => x.status === "unparsed"))
+      limitations.push(
+        `${f.path} could not be parsed, so the Supabase manual prerequisites are generic; the infrastructure component records the parse error.`,
+      );
+    detected = withSupabaseConfig(detected, supabaseConfigs);
+  } else
     omissions.push({
       what: "SDK detection from source",
       reason: co.reason,
@@ -217,6 +268,7 @@ export async function capture(
       name: p.name,
       origin: "declared" as const,
       inferred: false,
+      ...configFor(p.name, supabaseConfigs),
       api_version: p.api_version,
       scopes: p.scopes,
       webhooks: p.webhooks.map((w) => ({
@@ -235,6 +287,7 @@ export async function capture(
       name: x.provider,
       origin: "inferred" as const,
       inferred: true,
+      ...configFor(x.provider, supabaseConfigs),
       api_version: null,
       scopes: [] as string[],
       webhooks: [] as { url: string; events: string[] }[],
@@ -262,7 +315,7 @@ export async function capture(
     id: `${cid}:${safeSegment(p.name.toLowerCase())}`,
     title: `Re-establish access to ${p.name}`,
     reason: p.inferred
-      ? `${p.name} SDK dependencies were detected (${p.evidence.map((e) => e.dependency).join(", ")}) but the integration was not declared; whether and how it is used is unconfirmed.`
+      ? `${p.name} was detected in the source (${p.evidence.map((e) => e.dependency).join(", ")}) but the integration was not declared; whether and how it is used is unconfirmed.`
       : `Accounts, API keys, OAuth apps and webhook registrations at ${p.name} are not exported.`,
     instructions: [
       p.account_owner === null
@@ -277,6 +330,7 @@ export async function capture(
         ? ""
         : `Register callback URLs for the restore environment (production callbacks: ${p.callbacks.join(", ")}).`,
       ...p.manual_steps,
+      ...p.platform_config.map(supabaseSummary),
       "Create credentials dedicated to the restore environment; never reuse production secrets.",
     ]
       .filter((x) => x !== "")
@@ -296,10 +350,7 @@ export async function capture(
     ...outcome,
     status: omissions.length > 0 ? "partial" : "captured",
     omissions,
-    limitations: [
-      "Provider-side state (accounts, keys, OAuth apps, webhook registrations) is not captured; see manual prerequisites.",
-      "Inferred providers come from dependency names only.",
-    ],
+    limitations,
     capturedAt: { start: start.toISOString(), end: rt.now().toISOString() },
     stageDir: stage,
     manual,

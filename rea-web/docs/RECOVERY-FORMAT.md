@@ -15,7 +15,8 @@ RECOVERY.md                   human-readable restore guide generated from the ma
 source/                       git bundles, working-tree deltas, submodule bundles, LFS payloads
 data/                         database dumps (pg custom format), globals, schema-only dump, invariants
 assets/                       object payloads + per-bucket manifest (path, size, sha256, content-type, mtime)
-infrastructure/               services.json, env-names.json, domains.json, schedules.json, health.json, images.json
+infrastructure/               services.json, env-names.json, domains.json, schedules.json, health.json, images.json,
+                              platform.json (platform config parsed from the source, with file digests)
 product/                      PRD output (Code-to-PRD), route/field/permission/state/job/enum inventories, REA evidence refs
 artifacts/                    shipped-artifact evidence from REA (evidence bundles, raw results) when configured
 recovery/                     restore scripts (sh + ps1), verifier bundle (rea-recover.mjs), manifest schema, restore_guards.json
