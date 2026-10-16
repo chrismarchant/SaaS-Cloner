@@ -6,7 +6,7 @@ name: rea-web-local
 
 services:
   postgres:
-    image: postgres:18.0-bookworm
+    image: postgres:18.0-bookworm@sha256:3f55f8895c4ed50603e2fbdfc72fffeeaba3173321fee5cb825bbbeb30d9d854
     environment:
       POSTGRES_USER: rea_web
       POSTGRES_PASSWORD: rea_web_local_only

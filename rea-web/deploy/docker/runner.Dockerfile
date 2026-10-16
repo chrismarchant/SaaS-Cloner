@@ -3,7 +3,7 @@
 # preservation collectors use. Provider engines (Ghidra, Hopper, IDA, JADX,
 # Binwalk, Unblob, pwntools, WABT, Chromium) are NOT installed; their tools
 # remain unavailable and upstream reports why.
-FROM node:24.18.0-bookworm AS build
+FROM node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059 AS build
 ENV HUSKY=0
 WORKDIR /opt/rea
 COPY . .
@@ -11,7 +11,7 @@ RUN npm ci --no-audit --no-fund && npm run build:cached
 WORKDIR /opt/rea/rea-web
 RUN npm ci --no-audit --no-fund && npx tsc -b tsconfig.json && npm prune --omit=dev --no-audit --no-fund
 
-FROM node:24.18.0-bookworm-slim
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
 # git + git-lfs: source collector; python3: Code-to-PRD; postgresql-client-18
 # (matches the PostgreSQL 18 image Railway provisions) from the PGDG apt repo so pg_dump is never older than
 # the server it captures; ca-certificates for outbound HTTPS to the API.
