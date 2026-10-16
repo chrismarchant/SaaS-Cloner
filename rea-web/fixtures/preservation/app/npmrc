@@ -1,0 +1,2 @@
+registry=https://registry.example.com/npm/
+//registry.example.com/npm/:_authToken=npm_fixture_token_should_never_appear

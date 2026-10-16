@@ -1,0 +1,14 @@
+{
+  "scopes": ["clean_build", "data_restore", "behavior"],
+  "overall": "behavior_verified",
+  "package_dir_name": "pkg",
+  "source_id": "main",
+  "invariant": { "id": "notes-count", "expected": "3" },
+  "restored_files": {
+    "modified": "src/routes.js",
+    "untracked_text": "notes/todo.txt",
+    "untracked_binary": "scratch.dat",
+    "built_by_behavior_prerequisite": "dist/out.txt"
+  },
+  "absent_from_restored_tree": [".env"]
+}

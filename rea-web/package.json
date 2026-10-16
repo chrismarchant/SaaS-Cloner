@@ -1,0 +1,37 @@
+{
+  "name": "rea-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "REA Web + Build Recovery: downstream web control plane, runners and recovery tooling for upstream REA.",
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || ^24.11.0 || >=26.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json && npm run build -w @rea-web/recover-cli -w @rea-web/web --if-present",
+    "typecheck": "tsc -b tsconfig.json --noEmit false && npm run typecheck -w @rea-web/web",
+    "test": "vitest run",
+    "lint": "cd .. && npx oxlint rea-web && npx oxfmt --check rea-web",
+    "format": "cd .. && npx oxfmt rea-web",
+    "parity-matrix": "node tools/parity-matrix/generate.mjs",
+    "db:migrate": "node packages/db/dist/cli.js migrate",
+    "api": "node apps/api/dist/main.js",
+    "runner": "node apps/runner/dist/main.js",
+    "deploy:typecheck": "tsc -p .railway/tsconfig.json",
+    "deploy:validate": "npm run deploy:typecheck && tsx tools/deploy/validate-railway.ts && REA_WEB_RUNNER_TOKEN=placeholder docker compose -f deploy/compose/compose.yaml --profile runner config --quiet"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "pg": "8.23.1",
+    "playwright-core": "1.58.2",
+    "railway": "3.12.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.3"
+  }
+}

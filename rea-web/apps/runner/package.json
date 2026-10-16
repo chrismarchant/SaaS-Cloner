@@ -1,0 +1,33 @@
+{
+  "name": "@rea-web/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run --passWithNoTests",
+    "start": "node dist/main.js"
+  },
+  "bin": {
+    "rea-web-runner": "./dist/main.js"
+  },
+  "dependencies": {
+    "@rea-web/contracts": "0.1.0",
+    "@rea-web/rea-adapter": "0.1.0",
+    "@rea-web/model-connector": "0.1.0",
+    "@rea-web/preservation": "0.1.0",
+    "@rea-web/recovery": "0.1.0",
+    "pino": "10.4.0"
+  }
+}

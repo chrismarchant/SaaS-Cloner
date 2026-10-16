@@ -1,0 +1,8 @@
+{
+  "name": "billing",
+  "private": true,
+  "dependencies": {
+    "stripe": "^14.0.0",
+    "twilio": "^5.0.0"
+  }
+}

@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.rea-web-data
+**/coverage
+.railway
+deploy/compose
+fixtures
+third_party
+tools/parity-matrix/probes
+docs

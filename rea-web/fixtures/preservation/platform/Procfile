@@ -1,0 +1,5 @@
+# Process types for the legacy Heroku deploy
+web: node dist/server.js --port "$PORT"
+worker: node dist/worker.js
+release: node scripts/migrate.js
+scheduler: node jobs/run.js nightly

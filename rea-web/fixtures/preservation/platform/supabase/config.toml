@@ -1,0 +1,88 @@
+# A string used to distinguish different Supabase projects on the same host.
+project_id = "acme-app"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[storage.buckets.avatars]
+public = true
+file_size_limit = "5MiB"
+allowed_mime_types = ["image/png", "image/jpeg"]
+
+[storage.buckets.invoices]
+public = false
+file_size_limit = "20MiB"
+allowed_mime_types = ["application/pdf"]
+
+[auth]
+enabled = true
+site_url = "https://app.acme.example"
+additional_redirect_urls = [
+  "https://app.acme.example/auth/callback",
+  "https://staging.acme.example/**",
+  "http://localhost:3000/auth/callback",
+]
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[auth.email.smtp]
+host = "smtp.mailer.example"
+port = 587
+user = "apikey"
+pass = "env(SMTP_PASSWORD)"
+admin_email = "no-reply@acme.example"
+
+[auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+redirect_uri = ""
+skip_nonce_check = false
+
+[auth.external.github]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
+redirect_uri = "https://app.acme.example/auth/v1/callback"
+
+[auth.external.apple]
+enabled = false
+client_id = ""
+secret = ""
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+deno_version = 2
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[analytics]
+enabled = true
+port = 54327
+backend = "postgres"
