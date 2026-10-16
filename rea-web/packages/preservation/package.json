@@ -20,6 +20,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1149.0",
     "@rea-web/contracts": "0.1.0",
     "@rea-web/recovery": "0.1.0",
     "zod": "4.4.3"
